@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -24,16 +24,21 @@ typedef enum {
     BTC_L2CAP_ACT_CONNECT,
     BTC_L2CAP_ACT_START_SRV,
     BTC_L2CAP_ACT_STOP_SRV,
+    BTC_L2CAP_ACT_VFS_REGISTER,
+    BTC_L2CAP_ACT_VFS_UNREGISTER,
 } btc_l2cap_act_t;
 
 /* btc_l2cap_args_t */
 typedef union {
+    /* First member must not be empty due to compiler requirements */
     //BTC_L2CAP_ACT_INIT
     struct l2cap_init_arg {
+        UINT8 reserved;
     } init;
 
     //BTC_L2CAP_ACT_UNINIT
     struct l2cap_uninit_arg {
+        UINT8 reserved;
     } uninit;
 
     //BTC_L2CAP_ACT_START_DISCOVERY
@@ -65,8 +70,8 @@ typedef union {
 
 void btc_l2cap_call_handler(btc_msg_t *msg);
 void btc_l2cap_cb_handler(btc_msg_t *msg);
-esp_err_t btc_l2cap_vfs_register(void);
-esp_err_t btc_l2cap_vfs_unregister(void);
+
+void btc_l2cap_get_protocol_status(esp_bt_l2cap_protocol_status_t *param);
 
 #endif ///defined BTC_L2CAP_INCLUDED && BTC_L2CAP_INCLUDED == TRUE
 #endif ///__BTC_L2CAP_H__

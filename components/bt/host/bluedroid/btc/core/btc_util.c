@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -297,7 +297,7 @@ void uuid128_be_to_esp_uuid(esp_bt_uuid_t *u, uint8_t* uuid128)
     return;
 }
 
-void uuid_to_string_legacy(bt_uuid_t *p_uuid, char *str)
+void uuid_to_string_legacy(const bt_uuid_t *p_uuid, char *str)
 {
     uint32_t uuid0, uuid4;
     uint16_t uuid1, uuid2, uuid3, uuid5;
@@ -338,18 +338,21 @@ esp_bt_status_t btc_hci_to_esp_status(uint8_t hci_status)
         case HCI_ERR_ILLEGAL_PARAMETER_FMT:
             esp_status = ESP_BT_STATUS_ERR_ILLEGAL_PARAMETER_FMT;
             break;
+        case HCI_ERR_UNSUPPORTED_VALUE:
+            esp_status = ESP_BT_STATUS_UNSUPPORTED;
+            break;
         default:
-            esp_status = ESP_BT_STATUS_FAIL;
+            esp_status = hci_status | ESP_BT_STATUS_BASE_FOR_HCI_ERR;
             break;
     }
 
     return esp_status;
 }
 
-esp_bt_status_t btc_btm_status_to_esp_status (uint8_t btm_status)
+esp_bt_status_t btc_btm_status_to_esp_status(uint8_t btm_status)
 {
     esp_bt_status_t esp_status = ESP_BT_STATUS_FAIL;
-    switch(btm_status){
+    switch(btm_status) {
         case BTM_SUCCESS:
             esp_status = ESP_BT_STATUS_SUCCESS;
             break;
@@ -358,6 +361,9 @@ esp_bt_status_t btc_btm_status_to_esp_status (uint8_t btm_status)
             break;
         case BTM_NO_RESOURCES:
             esp_status = ESP_BT_STATUS_NOMEM;
+            break;
+        case BTM_MODE_UNSUPPORTED:
+            esp_status = ESP_BT_STATUS_UNSUPPORTED;
             break;
         case BTM_ILLEGAL_VALUE:
             esp_status = ESP_BT_STATUS_PARM_INVALID;
@@ -378,14 +384,18 @@ esp_bt_status_t btc_btm_status_to_esp_status (uint8_t btm_status)
             esp_status = ESP_BT_STATUS_FAIL;
             break;
         default:
-            esp_status = ESP_BT_STATUS_FAIL;
+            if (btm_status & BTM_HCI_ERROR) {
+                esp_status = ESP_BT_STATUS_BASE_FOR_HCI_ERR | (btm_status & 0x7F);
+            } else {
+                esp_status = ESP_BT_STATUS_FAIL;
+            }
             break;
     }
 
     return esp_status;
 }
 
-esp_bt_status_t btc_bta_status_to_esp_status (uint8_t bta_status)
+esp_bt_status_t btc_bta_status_to_esp_status(uint8_t bta_status)
 {
     esp_bt_status_t esp_status = ESP_BT_STATUS_FAIL;
     switch(bta_status){
@@ -416,4 +426,37 @@ esp_bt_status_t btc_bta_status_to_esp_status (uint8_t bta_status)
     }
 
     return esp_status;
+}
+
+void bta_to_btc_uuid(esp_bt_uuid_t *p_dest, tBT_UUID *p_src)
+{
+    p_dest->len = p_src->len;
+    if (p_src->len == LEN_UUID_16) {
+        p_dest->uuid.uuid16 = p_src->uu.uuid16;
+    } else if (p_src->len == LEN_UUID_32) {
+        p_dest->uuid.uuid32 = p_src->uu.uuid32;
+    } else if (p_src->len == LEN_UUID_128) {
+        memcpy(&p_dest->uuid.uuid128, p_src->uu.uuid128, p_dest->len);
+    } else if (p_src->len == 0) {
+        /* do nothing for now, there's some scenario will input 0
+           such as, receive notify, the descriptor may be 0 */
+    } else {
+        BTC_TRACE_ERROR("%s UUID len is invalid %d\n", __func__, p_src->len);
+    }
+}
+
+void btc_to_bta_uuid(tBT_UUID *p_dest, esp_bt_uuid_t *p_src)
+{
+    p_dest->len = p_src->len;
+    if (p_src->len == LEN_UUID_16) {
+        p_dest->uu.uuid16 = p_src->uuid.uuid16;
+    } else if (p_src->len == LEN_UUID_32) {
+        p_dest->uu.uuid32 = p_src->uuid.uuid32;
+    } else if (p_src->len == LEN_UUID_128) {
+        memcpy(&p_dest->uu.uuid128, p_src->uuid.uuid128, p_dest->len);
+    } else if (p_src->len == 0) {
+        /* do nothing for now, there's some scenario will input 0 */
+    } else {
+        BTC_TRACE_ERROR("%s UUID len is invalid %d\n", __func__, p_src->len);
+    }
 }

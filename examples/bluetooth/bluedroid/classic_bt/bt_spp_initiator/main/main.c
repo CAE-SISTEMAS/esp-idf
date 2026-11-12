@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -8,9 +8,11 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <inttypes.h>
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_bt.h"
@@ -30,8 +32,6 @@
 #define SPP_SHOW_SPEED 1
 #define SPP_SHOW_MODE SPP_SHOW_SPEED    /*Choose show mode: show data or speed*/
 
-static const esp_spp_mode_t esp_spp_mode = ESP_SPP_MODE_CB;
-
 static struct timeval time_new, time_old;
 static long data_num = 0;
 
@@ -41,7 +41,8 @@ static const esp_spp_role_t role_master = ESP_SPP_ROLE_MASTER;
 esp_bd_addr_t peer_bd_addr = {0};
 static uint8_t peer_bdname_len;
 static char peer_bdname[ESP_BT_GAP_MAX_BDNAME_LEN + 1];
-static const char remote_device_name[] = "ESP_SPP_ACCEPTOR";
+static const char remote_device_name[] = CONFIG_EXAMPLE_PEER_DEVICE_NAME;
+
 static const esp_bt_inq_mode_t inq_mode = ESP_BT_INQ_MODE_GENERAL_INQUIRY;
 static const uint8_t inq_len = 30;
 static const uint8_t inq_num_rsps = 0;
@@ -52,7 +53,11 @@ static const uint8_t inq_num_rsps = 0;
 #define SPP_DATA_LEN ESP_SPP_MAX_MTU
 #endif
 static uint8_t spp_data[SPP_DATA_LEN];
-static uint8_t *s_p_data = NULL; /* data pointer of spp_data */
+static uint32_t s_spp_handle = 0;
+static SemaphoreHandle_t s_spp_tx_uncong_sem = NULL;
+static TaskHandle_t s_spp_tx_task = NULL;
+static volatile bool s_spp_tx_running = false;
+static portMUX_TYPE s_spp_tx_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static char *bda2str(uint8_t * bda, char *str, size_t size)
 {
@@ -110,6 +115,46 @@ static bool get_name_from_eir(uint8_t *eir, char *bdname, uint8_t *bdname_len)
     return false;
 }
 
+/* Created on open. ESP_ERR_NO_MEM waits for ESP_SPP_CONG_EVT with cong == false. */
+static void spp_tx_task(void *arg)
+{
+    (void)arg;
+
+    for (;;) {
+        while (s_spp_tx_running) {
+            esp_err_t err = esp_spp_write(s_spp_handle, SPP_DATA_LEN, spp_data);
+            if (!s_spp_tx_running) {
+                break;
+            }
+            if (err == ESP_OK) {
+                continue;
+            }
+            if (err == ESP_ERR_NO_MEM) {
+                xSemaphoreTake(s_spp_tx_uncong_sem, portMAX_DELAY);
+                continue;
+            }
+            ESP_LOGE(SPP_TAG, "esp_spp_write failed: %s", esp_err_to_name(err));
+            taskENTER_CRITICAL(&s_spp_tx_mux);
+            s_spp_tx_running = false;
+            taskEXIT_CRITICAL(&s_spp_tx_mux);
+            break;
+        }
+
+        taskENTER_CRITICAL(&s_spp_tx_mux);
+        if (s_spp_tx_running) {
+            taskEXIT_CRITICAL(&s_spp_tx_mux);
+            continue;
+        }
+        if (s_spp_tx_task == xTaskGetCurrentTaskHandle()) {
+            s_spp_tx_task = NULL;
+        }
+        taskEXIT_CRITICAL(&s_spp_tx_mux);
+        break;
+    }
+
+    vTaskDelete(NULL);
+}
+
 static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 {
     uint8_t i = 0;
@@ -119,7 +164,7 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
     case ESP_SPP_INIT_EVT:
         if (param->init.status == ESP_SPP_SUCCESS) {
             ESP_LOGI(SPP_TAG, "ESP_SPP_INIT_EVT");
-            esp_bt_dev_set_device_name(EXAMPLE_DEVICE_NAME);
+            esp_bt_gap_set_device_name(EXAMPLE_DEVICE_NAME);
             esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
             esp_bt_gap_start_discovery(inq_mode, inq_len, inq_num_rsps);
         } else {
@@ -141,26 +186,41 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         break;
     case ESP_SPP_OPEN_EVT:
         if (param->open.status == ESP_SPP_SUCCESS) {
-            ESP_LOGI(SPP_TAG, "ESP_SPP_OPEN_EVT handle:%d rem_bda:[%s]", param->open.handle,
+            ESP_LOGI(SPP_TAG, "ESP_SPP_OPEN_EVT handle:%"PRIu32" rem_bda:[%s]", param->open.handle,
                      bda2str(param->open.rem_bda, bda_str, sizeof(bda_str)));
-            /* Start to write the first data packet */
-            esp_spp_write(param->open.handle, SPP_DATA_LEN, spp_data);
-            s_p_data = spp_data;
+            s_spp_handle = param->open.handle;
             gettimeofday(&time_old, NULL);
+            bool create_task = false;
+            taskENTER_CRITICAL(&s_spp_tx_mux);
+            s_spp_tx_running = true;
+            create_task = (s_spp_tx_task == NULL);
+            taskEXIT_CRITICAL(&s_spp_tx_mux);
+            if (create_task && xTaskCreate(spp_tx_task, "spp_tx", 3072, NULL, 5, &s_spp_tx_task) != pdPASS) {
+                taskENTER_CRITICAL(&s_spp_tx_mux);
+                s_spp_tx_running = false;
+                taskEXIT_CRITICAL(&s_spp_tx_mux);
+                ESP_LOGE(SPP_TAG, "create spp_tx task failed");
+            }
         } else {
             ESP_LOGE(SPP_TAG, "ESP_SPP_OPEN_EVT status:%d", param->open.status);
         }
         break;
     case ESP_SPP_CLOSE_EVT:
-        ESP_LOGI(SPP_TAG, "ESP_SPP_CLOSE_EVT status:%d handle:%d close_by_remote:%d", param->close.status,
+        ESP_LOGI(SPP_TAG, "ESP_SPP_CLOSE_EVT status:%d handle:%"PRIu32" close_by_remote:%d", param->close.status,
                  param->close.handle, param->close.async);
+        taskENTER_CRITICAL(&s_spp_tx_mux);
+        s_spp_tx_running = false;
+        taskEXIT_CRITICAL(&s_spp_tx_mux);
+        if (s_spp_tx_uncong_sem) {
+            xSemaphoreGive(s_spp_tx_uncong_sem);
+        }
         break;
     case ESP_SPP_START_EVT:
         ESP_LOGI(SPP_TAG, "ESP_SPP_START_EVT");
         break;
     case ESP_SPP_CL_INIT_EVT:
         if (param->cl_init.status == ESP_SPP_SUCCESS) {
-            ESP_LOGI(SPP_TAG, "ESP_SPP_CL_INIT_EVT handle:%d sec_id:%d", param->cl_init.handle, param->cl_init.sec_id);
+            ESP_LOGI(SPP_TAG, "ESP_SPP_CL_INIT_EVT handle:%"PRIu32" sec_id:%d", param->cl_init.handle, param->cl_init.sec_id);
         } else {
             ESP_LOGE(SPP_TAG, "ESP_SPP_CL_INIT_EVT status:%d", param->cl_init.status);
         }
@@ -169,66 +229,33 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         ESP_LOGI(SPP_TAG, "ESP_SPP_DATA_IND_EVT");
         break;
     case ESP_SPP_WRITE_EVT:
-        if (param->write.status == ESP_SPP_SUCCESS) {
-            if (s_p_data + param->write.len == spp_data + SPP_DATA_LEN) {
-                /* Means the previous data packet be sent completely, send a new data packet */
-                s_p_data = spp_data;
-            } else {
-                /*
-                 * Means the previous data packet only be sent partially due to the lower layer congestion, resend the
-                 * remainning data.
-                 */
-                s_p_data += param->write.len;
-            }
 #if (SPP_SHOW_MODE == SPP_SHOW_DATA)
-            /*
-             * We only show the data in which the data length is less than 128 here. If you want to print the data and
-             * the data rate is high, it is strongly recommended to process them in other lower priority application task
-             * rather than in this callback directly. Since the printing takes too much time, it may stuck the Bluetooth
-             * stack and also have a effect on the throughput!
-             */
-            ESP_LOGI(SPP_TAG, "ESP_SPP_WRITE_EVT len:%d handle:%d cong:%d", param->write.len, param->write.handle,
-                     param->write.cong);
-            if (param->write.len < 128) {
-                esp_log_buffer_hex("", spp_data, param->write.len);
-                /* Delay a little to avoid the task watch dog */
-                vTaskDelay(pdMS_TO_TICKS(10));
-            }
-#else
-            gettimeofday(&time_new, NULL);
-            data_num += param->write.len;
-            if (time_new.tv_sec - time_old.tv_sec >= 3) {
-                print_speed();
-            }
-#endif
-        } else {
-            /* Means the prevous data packet is not sent at all, need to send the whole data packet again. */
-            ESP_LOGE(SPP_TAG, "ESP_SPP_WRITE_EVT status:%d", param->write.status);
-        }
-
-        if (!param->write.cong) {
-            /* The lower layer is not congested, you can send the next data packet now. */
-            esp_spp_write(param->write.handle, spp_data + SPP_DATA_LEN - s_p_data, s_p_data);
-        } else {
-            /*
-             * The lower layer is congested now, don't send the next data packet until receiving the
-             * ESP_SPP_CONG_EVT with param->cong.cong == 0.
-             */
-            ;
-        }
-
         /*
-         * If you don't want to manage this complicated process, we also provide the SPP VFS mode that hides the
-         * implementation details. However, it is less efficient and will block the caller until all data has been sent.
+         * We only show the data in which the data length is less than 128 here. If you want to print the data and
+         * the data rate is high, it is strongly recommended to process them in other lower priority application task
+         * rather than in this callback directly. Since the printing takes too much time, it may stuck the Bluetooth
+         * stack and also have a effect on the throughput!
          */
+        ESP_LOGI(SPP_TAG, "ESP_SPP_WRITE_EVT len:%d handle:%"PRIu32, param->write.len, param->write.handle);
+        if (param->write.len < 128) {
+            ESP_LOG_BUFFER_HEX("", spp_data, param->write.len);
+            /* Delay a little to avoid the task watch dog */
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+#else
+        gettimeofday(&time_new, NULL);
+        data_num += param->write.len;
+        if (time_new.tv_sec - time_old.tv_sec >= 3) {
+            print_speed();
+        }
+#endif
         break;
     case ESP_SPP_CONG_EVT:
 #if (SPP_SHOW_MODE == SPP_SHOW_DATA)
         ESP_LOGI(SPP_TAG, "ESP_SPP_CONG_EVT cong:%d", param->cong.cong);
 #endif
-        if (param->cong.cong == 0) {
-            /* Send the privous (partial) data packet or the next data packet. */
-            esp_spp_write(param->write.handle, spp_data + SPP_DATA_LEN - s_p_data, s_p_data);
+        if (param->cong.cong == 0 && s_spp_tx_uncong_sem) {
+            xSemaphoreGive(s_spp_tx_uncong_sem);
         }
         break;
     case ESP_SPP_SRV_OPEN_EVT:
@@ -247,12 +274,12 @@ static void esp_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
     switch(event){
     case ESP_BT_GAP_DISC_RES_EVT:
         ESP_LOGI(SPP_TAG, "ESP_BT_GAP_DISC_RES_EVT");
-        esp_log_buffer_hex(SPP_TAG, param->disc_res.bda, ESP_BD_ADDR_LEN);
+        ESP_LOG_BUFFER_HEX(SPP_TAG, param->disc_res.bda, ESP_BD_ADDR_LEN);
         /* Find the target peer device name in the EIR data */
         for (int i = 0; i < param->disc_res.num_prop; i++){
             if (param->disc_res.prop[i].type == ESP_BT_GAP_DEV_PROP_EIR
                 && get_name_from_eir(param->disc_res.prop[i].val, peer_bdname, &peer_bdname_len)){
-                esp_log_buffer_char(SPP_TAG, peer_bdname, peer_bdname_len);
+                ESP_LOG_BUFFER_CHAR(SPP_TAG, peer_bdname, peer_bdname_len);
                 if (strlen(remote_device_name) == peer_bdname_len
                     && strncmp(peer_bdname, remote_device_name, peer_bdname_len) == 0) {
                     memcpy(peer_bd_addr, param->disc_res.bda, ESP_BD_ADDR_LEN);
@@ -276,7 +303,7 @@ static void esp_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
     case ESP_BT_GAP_AUTH_CMPL_EVT:{
         if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) {
             ESP_LOGI(SPP_TAG, "authentication success: %s", param->auth_cmpl.device_name);
-            esp_log_buffer_hex(SPP_TAG, param->auth_cmpl.bda, ESP_BD_ADDR_LEN);
+            ESP_LOG_BUFFER_HEX(SPP_TAG, param->auth_cmpl.bda, ESP_BD_ADDR_LEN);
         } else {
             ESP_LOGE(SPP_TAG, "authentication failed, status:%d", param->auth_cmpl.stat);
         }
@@ -300,14 +327,14 @@ static void esp_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
         break;
     }
 
-#if (CONFIG_BT_SSP_ENABLED == true)
+#if (CONFIG_EXAMPLE_SSP_ENABLED == true)
     case ESP_BT_GAP_CFM_REQ_EVT:
-        ESP_LOGI(SPP_TAG, "ESP_BT_GAP_CFM_REQ_EVT Please compare the numeric value: %d", param->cfm_req.num_val);
+        ESP_LOGI(SPP_TAG, "ESP_BT_GAP_CFM_REQ_EVT Please compare the numeric value: %06"PRIu32, param->cfm_req.num_val);
         ESP_LOGW(SPP_TAG, "To confirm the value, type `spp ok;`");
         break;
     case ESP_BT_GAP_KEY_NOTIF_EVT:
-        ESP_LOGI(SPP_TAG, "ESP_BT_GAP_KEY_NOTIF_EVT passkey:%d", param->key_notif.passkey);
-        ESP_LOGW(SPP_TAG, "Waiting responce...");
+        ESP_LOGI(SPP_TAG, "ESP_BT_GAP_KEY_NOTIF_EVT passkey:%06"PRIu32, param->key_notif.passkey);
+        ESP_LOGW(SPP_TAG, "Waiting response...");
         break;
     case ESP_BT_GAP_KEY_REQ_EVT:
         ESP_LOGI(SPP_TAG, "ESP_BT_GAP_KEY_REQ_EVT Please enter passkey!");
@@ -344,31 +371,35 @@ void app_main(void)
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     if ((ret = esp_bt_controller_init(&bt_cfg)) != ESP_OK) {
-        ESP_LOGE(SPP_TAG, "%s initialize controller failed: %s\n", __func__, esp_err_to_name(ret));
+        ESP_LOGE(SPP_TAG, "%s initialize controller failed: %s", __func__, esp_err_to_name(ret));
         return;
     }
 
     if ((ret = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT)) != ESP_OK) {
-        ESP_LOGE(SPP_TAG, "%s enable controller failed: %s\n", __func__, esp_err_to_name(ret));
+        ESP_LOGE(SPP_TAG, "%s enable controller failed: %s", __func__, esp_err_to_name(ret));
         return;
     }
 
-    if ((ret = esp_bluedroid_init()) != ESP_OK) {
-        ESP_LOGE(SPP_TAG, "%s initialize bluedroid failed: %s\n", __func__, esp_err_to_name(ret));
+    esp_bluedroid_config_t bluedroid_cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
+#if (CONFIG_EXAMPLE_SSP_ENABLED == false)
+    bluedroid_cfg.ssp_en = false;
+#endif
+    if ((ret = esp_bluedroid_init_with_cfg(&bluedroid_cfg)) != ESP_OK) {
+        ESP_LOGE(SPP_TAG, "%s initialize bluedroid failed: %s", __func__, esp_err_to_name(ret));
         return;
     }
 
     if ((ret = esp_bluedroid_enable()) != ESP_OK) {
-        ESP_LOGE(SPP_TAG, "%s enable bluedroid failed: %s\n", __func__, esp_err_to_name(ret));
+        ESP_LOGE(SPP_TAG, "%s enable bluedroid failed: %s", __func__, esp_err_to_name(ret));
         return;
     }
 
     if ((ret = esp_bt_gap_register_callback(esp_bt_gap_cb)) != ESP_OK) {
-        ESP_LOGE(SPP_TAG, "%s gap register failed: %s\n", __func__, esp_err_to_name(ret));
+        ESP_LOGE(SPP_TAG, "%s gap register failed: %s", __func__, esp_err_to_name(ret));
         return;
     }
 
-#if (CONFIG_BT_SSP_ENABLED == true)
+#if (CONFIG_EXAMPLE_SSP_ENABLED == true)
     /* Set default parameters for Secure Simple Pairing */
     esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
     esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_IN;
@@ -379,13 +410,20 @@ void app_main(void)
     }
 #endif
 
-    if ((ret = esp_spp_register_callback(esp_spp_cb)) != ESP_OK) {
-        ESP_LOGE(SPP_TAG, "%s spp register failed: %s\n", __func__, esp_err_to_name(ret));
+    s_spp_tx_uncong_sem = xSemaphoreCreateBinary();
+    if (s_spp_tx_uncong_sem == NULL) {
+        ESP_LOGE(SPP_TAG, "%s create tx semaphore failed", __func__);
         return;
     }
 
-    if ((ret = esp_spp_init(esp_spp_mode)) != ESP_OK) {
-        ESP_LOGE(SPP_TAG, "%s spp init failed: %s\n", __func__, esp_err_to_name(ret));
+    if ((ret = esp_spp_register_callback(esp_spp_cb)) != ESP_OK) {
+        ESP_LOGE(SPP_TAG, "%s spp register failed: %s", __func__, esp_err_to_name(ret));
+        return;
+    }
+
+    esp_spp_cfg_t bt_spp_cfg = BT_SPP_CB_MODE_DEFAULT_CONFIG();
+    if ((ret = esp_spp_enhanced_init(&bt_spp_cfg)) != ESP_OK) {
+        ESP_LOGE(SPP_TAG, "%s spp init failed: %s", __func__, esp_err_to_name(ret));
         return;
     }
 

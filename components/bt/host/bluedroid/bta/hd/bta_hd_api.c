@@ -49,9 +49,20 @@ void BTA_HdEnable(tBTA_HD_CBACK *p_cback)
 {
     tBTA_HD_API_ENABLE *p_buf;
     APPL_TRACE_API("%s", __func__);
-    bta_sys_register(BTA_ID_HD, &bta_hd_reg);
-    p_buf = (tBTA_HD_API_ENABLE *)osi_malloc((uint16_t)sizeof(tBTA_HD_API_ENABLE));
+
+    if (bta_sys_is_register(BTA_ID_HD) == TRUE) {
+        APPL_TRACE_WARNING("%s HD already enable", __func__);
+        if (p_cback) {
+            tBTA_HD param = {0};
+            param.status = BTA_HD_OK;
+            (*p_cback)(BTA_HD_ENABLE_EVT, &param);
+        }
+        return;
+    }
+
+    p_buf = (tBTA_HD_API_ENABLE *)osi_malloc(sizeof(tBTA_HD_API_ENABLE));
     if (p_buf != NULL) {
+        bta_sys_register(BTA_ID_HD, &bta_hd_reg);
         memset(p_buf, 0, sizeof(tBTA_HD_API_ENABLE));
         p_buf->hdr.event = BTA_HD_API_ENABLE_EVT;
         p_buf->p_cback = p_cback;
@@ -71,7 +82,6 @@ void BTA_HdDisable(void)
 {
     BT_HDR *p_buf;
     APPL_TRACE_API("%s", __func__);
-    bta_sys_deregister(BTA_ID_HD);
     if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR))) != NULL) {
         p_buf->event = BTA_HD_API_DISABLE_EVT;
         bta_sys_sendmsg(p_buf);
@@ -89,6 +99,24 @@ void BTA_HdDisable(void)
  ******************************************************************************/
 extern void BTA_HdRegisterApp(tBTA_HD_APP_INFO *p_app_info, tBTA_HD_QOS_INFO *p_in_qos, tBTA_HD_QOS_INFO *p_out_qos)
 {
+    if (p_app_info == NULL || p_in_qos == NULL || p_out_qos == NULL) {
+        APPL_TRACE_ERROR("bad app_info(%p), in_qos(%p) or out_qos(%p)", p_app_info, p_in_qos, p_out_qos);
+        return;
+    }
+
+    /* Validate descriptor length before copying */
+    if (p_app_info->descriptor.dl_len > BTA_HD_APP_DESCRIPTOR_LEN) {
+        APPL_TRACE_ERROR("HID descriptor too large: %u > %u",
+                    p_app_info->descriptor.dl_len, BTA_HD_APP_DESCRIPTOR_LEN);
+        return;
+    }
+
+    /* Validate descriptor data pointer */
+    if (p_app_info->descriptor.dl_len > 0 && p_app_info->descriptor.dsc_list == NULL) {
+        APPL_TRACE_ERROR("HID descriptor data NULL but length > 0: %u", p_app_info->descriptor.dl_len);
+        return;
+    }
+
     tBTA_HD_REGISTER_APP *p_buf;
     APPL_TRACE_API("%s", __func__);
     if ((p_buf = (tBTA_HD_REGISTER_APP *)osi_malloc(sizeof(tBTA_HD_REGISTER_APP))) != NULL) {
@@ -158,6 +186,13 @@ extern void BTA_HdSendReport(tBTA_HD_REPORT *p_report)
                            __func__, p_report->len, BTA_HD_REPORT_LEN);
         return;
     }
+
+    /* Validate report data pointer */
+    if (p_report->len > 0 && p_report->p_data == NULL) {
+        APPL_TRACE_ERROR("HID report data pointer NULL but length > 0: %d", p_report->len);
+        return;
+    }
+
     if ((p_buf = (tBTA_HD_SEND_REPORT *)osi_malloc(sizeof(tBTA_HD_SEND_REPORT))) != NULL) {
         p_buf->hdr.event = BTA_HD_API_SEND_REPORT_EVT;
         p_buf->use_intr = p_report->use_intr;

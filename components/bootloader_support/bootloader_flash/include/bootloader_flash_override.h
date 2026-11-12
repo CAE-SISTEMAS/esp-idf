@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -15,6 +15,26 @@ extern "C" {
 
 typedef unsigned (*bootloader_flash_read_status_fn_t)(void);
 typedef void (*bootloader_flash_write_status_fn_t)(unsigned);
+
+/**
+ * @brief Execute a user command on the flash
+ *
+ * @param command The command value to execute.
+ * @param mosi_data MOSI data to send
+ * @param mosi_len Length of MOSI data, in bits
+ * @param miso_len Length of MISO data to receive, in bits
+ * @return Received MISO data
+ */
+uint32_t bootloader_execute_flash_command(uint8_t command, uint32_t mosi_data, uint8_t mosi_len, uint8_t miso_len);
+
+/**
+ * @brief Read the SFDP of the flash
+ *
+ * @param sfdp_addr Address of the parameter to read
+ * @param miso_byte_num Bytes to read
+ * @return The read SFDP, little endian, 4 bytes at most
+ */
+uint32_t bootloader_flash_read_sfdp(uint32_t sfdp_addr, unsigned int miso_byte_num);
 
 typedef struct __attribute__((packed))
 {
@@ -89,8 +109,8 @@ void bootloader_write_status_8b_xmc25qu64a(unsigned new_status);
 
 /* Array of known flash chips and data to enable Quad I/O mode
 
-   Manufacturer & flash ID can be tested by running "esptool.py
-   flash_id"
+   Manufacturer & flash ID can be tested by running "esptool
+   flash-id"
 
    If manufacturer ID matches, and flash ID ORed with flash ID mask
    matches, enable_qio_mode() will execute "Read Cmd", test if bit
@@ -99,15 +119,31 @@ void bootloader_write_status_8b_xmc25qu64a(unsigned new_status);
 
    Searching of this table stops when the first match is found.
  */
-extern const bootloader_qio_info_t __attribute__((weak)) bootloader_flash_qe_support_list[];
+extern const bootloader_qio_info_t* bootloader_flash_qe_support_list;
+
+/**
+ * @brief The bootloader flash qe list count number.
+*/
+extern uint8_t bootloader_flash_qe_list_count;
 
 /**
   * @brief Unlock Flash write protect.
   *        Please do not call this function in SDK.
   *
-  * @note This can be overridden because it's attribute weak.
+  * @note This can be overridden because it's attribute weak, when there is a same name symbol.
   */
-esp_err_t __attribute__((weak)) bootloader_flash_unlock(void);
+esp_err_t bootloader_flash_unlock(void);
+
+#if CONFIG_BOOTLOADER_CACHE_32BIT_ADDR_QUAD_FLASH || CONFIG_BOOTLOADER_CACHE_32BIT_ADDR_OCTAL_FLASH
+/**
+ * @brief Enable 32bits address flash(larger than 16MB) can map to cache.
+ *
+ * @param flash_mode SPI flash working mode.
+ *
+ * @note This can be overridden because it's attribute weak, when there is a same name symbol.
+ */
+void __attribute__((weak)) bootloader_flash_32bits_address_map_enable(esp_rom_spiflash_read_mode_t flash_mode);
+#endif
 
 #ifdef __cplusplus
 }

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -7,16 +7,18 @@
 #pragma once
 
 #include "esp_attr.h"
+#include "esp_err.h"
+#include "esp_bit_defs.h"
+#include "esp_cpu.h"
+#include "esp_private/esp_sys_event_system_init.h"
 
 #include "soc/soc_caps.h"
-#include "hal/cpu_hal.h"
 
 #include "sdkconfig.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
 
 // Port layer defines the entry point. It then transfer control to a `sys_startup_fn_t`, stored in this
 // array, one per core.
@@ -30,35 +32,73 @@ extern sys_startup_fn_t const g_startup_fn[1];
 #endif
 
 // Utility to execute `sys_startup_fn_t` for the current core.
-#define SYS_STARTUP_FN()  ((*g_startup_fn[(cpu_hal_get_core_id())])())
+#define SYS_STARTUP_FN()  ((*g_startup_fn[(esp_cpu_get_core_id())])())
 
 #if !CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE
 void startup_resume_other_cores(void);
 #endif
 
-typedef struct {
-  void (*fn)(void);
-  uint32_t cores;
-} esp_system_init_fn_t;
-
-/*
- * Declare an component initialization function that will execute on the specified cores (ex. if BIT0 == 1, will execute
- * on CORE0, CORE1 if BIT1 and so on).
+/**
+ * @brief Define a system initialization function which will be executed on the specified cores
  *
- * @note Initialization functions should be placed in a compilation unit where at least one other
- * symbol is referenced 'meaningfully' in another compilation unit, otherwise this gets discarded during linking. (By
- * 'meaningfully' we mean the reference should not itself get optimized out by the compiler/discarded by the linker).
+ * @param f  function name (identifier)
+ * @param stage_  init stage name (CORE or SECONDARY)
+ * @param c  bit mask of cores to execute the SECONDARY function on (ex. if BIT0 is set, the function
+ *           will be executed on CPU 0, if BIT1 is set - on CPU 1, and so on)
+ * @param priority  integer, priority of the initialization function. Higher values mean that
+ *                  the function will be executed later in the process.
+ * @param (varargs)  optional, additional attributes for the function declaration (such as IRAM_ATTR)
+ *
+ * The function defined using this macro must return ESP_OK on success. Any other value will be
+ * logged and the startup process will abort.
+ *
+ * Initialization functions should be placed in a compilation unit where at least one other
+ * symbol is referenced in another compilation unit. This means that the reference should not itself
+ * get optimized out by the compiler or discarded by the linker if the related feature is used.
+ * It is, on the other hand, a good practice to make sure the initialization function does get
+ * discarded if the related feature is not used.
+ *
+ * @note Compatibility wrapper: legacy users continue to register with
+ *       `ESP_SYSTEM_INIT_FN`, but the generated adapters run through the
+ *       `esp_sys_event`-based init stages.
+ *
+ *       CORE-stage handlers register directly into `SYSTEM_INIT_CORE` (only
+ *       core 0 is running at that point). SECONDARY-stage handlers register
+ *       into the shared `SYSTEM_INIT_SECONDARY` list so all secondary handlers
+ *       are priority-ordered together; a runtime core-mask check skips cores
+ *       not in `c`, matching the legacy behaviour.
  */
-#define ESP_SYSTEM_INIT_FN(f, c, ...) \
-static void  __attribute__((used)) __VA_ARGS__ __esp_system_init_fn_##f(void); \
-static __attribute__((used)) esp_system_init_fn_t _SECTION_ATTR_IMPL(".esp_system_init_fn", f) \
-                    esp_system_init_fn_##f = { .fn = ( __esp_system_init_fn_##f), .cores = (c) }; \
-static __attribute__((used)) __VA_ARGS__ void __esp_system_init_fn_##f(void) // [refactor-todo] this can be made public API if we allow components to declare init functions,
-                                                                             // instead of calling them explicitly
+#define _ESP_SYSTEM_INIT_COMPAT_CORE(f, c, priority) \
+    ESP_SYSTEM_INIT_CORE(__esp_system_init_##f, priority) \
+    { \
+        (void)user_arg; (void)ctx; \
+        return __esp_system_init_fn_##f(); \
+    }
+
+#define _ESP_SYSTEM_INIT_COMPAT_SECONDARY(f, c, priority) \
+    _ESP_SYSTEM_INIT_SECONDARY_RAW(__esp_system_init_##f, priority) \
+    { \
+        (void)user_arg; (void)ctx; \
+        if (((c) & BIT(esp_cpu_get_core_id())) == 0) { \
+            return ESP_OK; \
+        } \
+        return __esp_system_init_fn_##f(); \
+    }
+
+#define ESP_SYSTEM_INIT_FN(f, stage_, c, priority, ...) \
+    static esp_err_t __VA_ARGS__ __esp_system_init_fn_##f(void); \
+    _ESP_SYSTEM_INIT_COMPAT_##stage_(f, c, priority) \
+    static esp_err_t __esp_system_init_fn_##f(void)
+
+#ifdef CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE
+#define ESP_SYSTEM_INIT_ALL_CORES BIT(0)
+#else
+#define ESP_SYSTEM_INIT_ALL_CORES (BIT(SOC_CPU_CORES_NUM) - 1)
+#endif
 
 extern uint64_t g_startup_time;   // Startup time that serves as the point of origin for system time. Should be set by the entry
-                                  // function in the port layer. May be 0 as well if this is not backed by a persistent counter, in which case
-                                  // startup time = system time = 0 at the point the entry function sets this variable.
+// function in the port layer. May be 0 as well if this is not backed by a persistent counter, in which case
+// startup time = system time = 0 at the point the entry function sets this variable.
 
 #ifdef __cplusplus
 }

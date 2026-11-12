@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -12,12 +12,19 @@
 #include <assert.h>
 #include "soc/soc_caps.h"
 #ifdef __XTENSA__
-#include "xtensa/xtensa_api.h"
+#include "xtensa_api.h"
 #include "xt_utils.h"
 #elif __riscv
+#include "riscv/csr.h"
 #include "riscv/rv_utils.h"
 #endif
+#include "esp_intr_alloc.h"
 #include "esp_err.h"
+#include "esp_attr.h"
+
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+#include "secure_service_num.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,7 +41,7 @@ typedef uint32_t esp_cpu_cycle_count_t;
  * @brief CPU interrupt type
  */
 typedef enum {
-    ESP_CPU_INTR_TYPE_LEVEL,
+    ESP_CPU_INTR_TYPE_LEVEL = 0,
     ESP_CPU_INTR_TYPE_EDGE,
     ESP_CPU_INTR_TYPE_NA,
 } esp_cpu_intr_type_t;
@@ -103,6 +110,10 @@ void esp_cpu_reset(int core_id);
  * This function causes the current CPU core to execute its Wait For Interrupt
  * (WFI or equivalent) instruction. After executing this function, the CPU core
  * will stop execution until an interrupt occurs.
+ *
+ * @note On some RISC-V targets, if a debugger is attached while the hardware
+ *       wait mode is disabled, this function may return immediately instead of
+ *       entering WFI. This keeps debugger memory access working.
  */
 void esp_cpu_wait_for_intr(void);
 
@@ -127,6 +138,29 @@ FORCE_INLINE_ATTR __attribute__((pure)) int esp_cpu_get_core_id(void)
     return (int)rv_utils_get_core_id();
 #endif
 }
+/**
+ * @brief Get the current [RISC-V] CPU core's privilege level
+ *
+ * This function returns the current privilege level of the CPU core executing
+ * this function.
+ *
+ * @return The current CPU core's privilege level, -1 if not supported.
+ */
+
+FORCE_INLINE_ATTR __attribute__((always_inline)) int esp_cpu_get_curr_privilege_level(void)
+{
+#ifdef __XTENSA__
+    return -1;
+#else
+#if CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32C2
+    return PRV_M;
+#elif defined(CSR_PRV_MODE)
+    return RV_READ_CSR(CSR_PRV_MODE);
+#else
+    return -1;
+#endif
+#endif
+}
 
 /**
  * @brief Read the current stack pointer address
@@ -147,6 +181,15 @@ FORCE_INLINE_ATTR void *esp_cpu_get_sp(void)
  *
  * Each CPU core maintains an internal counter (i.e., cycle count) that increments
  * every CPU clock cycle.
+ *
+ * @note On targets with SOC_CPU_CCOUNT_STOPS_IN_WFI (ESP32-C2, ESP32-C3, ESP32-C6,
+ *       ESP32-H2, ESP32-H21) the counter only advances while the core executes:
+ *       WFI halts it, so it stops whenever the idle task puts the core to sleep.
+ *       There it measures CPU activity, not elapsed time -- an idle ESP32-C6 at
+ *       160 MHz advances it by roughly 170 kHz. It is still suitable for
+ *       measuring the cost of a code path that runs to completion without
+ *       sleeping, but for elapsed time use esp_timer_get_time() or a GPTimer.
+ *       On other targets the counter keeps running while the core is idle.
  *
  * @return Current CPU's cycle count, 0 if not supported.
  */
@@ -196,6 +239,37 @@ FORCE_INLINE_ATTR __attribute__((pure)) void *esp_cpu_pc_to_addr(uint32_t pc)
 #endif
 }
 
+/**
+ * @brief Set the current CPU core's thread pointer
+ *
+ * Sets the thread pointer register to the given value.
+ *
+ * @param threadptr Pointer to the thread-local storage area
+ */
+FORCE_INLINE_ATTR void esp_cpu_set_threadptr(void * threadptr)
+{
+#ifdef __XTENSA__
+    xt_utils_set_threadptr(threadptr);
+#else
+    rv_utils_set_threadptr(threadptr);
+#endif
+}
+
+/**
+ * @brief Get the current CPU core's thread pointer
+ *
+ * @return thread pointer register value
+ */
+FORCE_INLINE_ATTR void *esp_cpu_get_threadptr(void)
+{
+#ifdef __XTENSA__
+    return xt_utils_get_threadptr();
+#else
+    return rv_utils_get_threadptr();
+#endif
+}
+
+
 /* ------------------------------------------------- CPU Interrupts ----------------------------------------------------
  *
  * ------------------------------------------------------------------------------------------------------------------ */
@@ -227,9 +301,51 @@ FORCE_INLINE_ATTR void esp_cpu_intr_set_ivt_addr(const void *ivt_addr)
 #ifdef __XTENSA__
     xt_utils_set_vecbase((uint32_t)ivt_addr);
 #else
-    rv_utils_set_mtvec((uint32_t)ivt_addr);
+    rv_utils_set_xtvec((uint32_t)ivt_addr);
 #endif
 }
+
+#if SOC_INT_CLIC_SUPPORTED
+/**
+ * @brief Set the base address of the current CPU's Interrupt Vector Table (MTVT)
+ *
+ * @param mtvt_addr Interrupt Vector Table's base address
+ *
+ * @note The MTVT table is only applicable when CLIC is supported
+ */
+FORCE_INLINE_ATTR void esp_cpu_intr_set_mtvt_addr(const void *mtvt_addr)
+{
+    rv_utils_set_mtvt((uint32_t)mtvt_addr);
+}
+
+/**
+ * @brief Set the base address of the current CPU's Interrupt Vector Table (XTVT), based
+ * on the current privilege level
+ *
+ * @param xtvt_addr Interrupt Vector Table's base address
+ *
+ * @note The XTVT table is only applicable when CLIC is supported
+ */
+FORCE_INLINE_ATTR void esp_cpu_intr_set_xtvt_addr(const void *xtvt_addr)
+{
+    rv_utils_set_xtvt((uint32_t)xtvt_addr);
+}
+#endif  //#if SOC_INT_CLIC_SUPPORTED
+
+#if SOC_CPU_SUPPORT_WFE
+/**
+ * @brief Disable the WFE (wait for event) feature for CPU.
+ */
+FORCE_INLINE_ATTR void esp_cpu_disable_wfe_mode(void)
+{
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+    extern esprv_int_mgmt_t esp_tee_intr_sec_srv_cb;
+    esp_tee_intr_sec_srv_cb(2, SS_RV_UTILS_WFE_MODE_ENABLE, false);
+#else
+    rv_utils_wfe_mode_enable(false);
+#endif
+}
+#endif
 
 #if SOC_CPU_HAS_FLEXIBLE_INTC
 /**
@@ -245,7 +361,7 @@ FORCE_INLINE_ATTR void esp_cpu_intr_set_type(int intr_num, esp_cpu_intr_type_t i
 {
     assert(intr_num >= 0 && intr_num < SOC_CPU_INTR_NUM);
     enum intr_type type = (intr_type == ESP_CPU_INTR_TYPE_LEVEL) ? INTR_TYPE_LEVEL : INTR_TYPE_EDGE;
-    esprv_intc_int_set_type(intr_num, type);
+    esprv_int_set_type(intr_num, type);
 }
 
 /**
@@ -260,7 +376,7 @@ FORCE_INLINE_ATTR void esp_cpu_intr_set_type(int intr_num, esp_cpu_intr_type_t i
 FORCE_INLINE_ATTR esp_cpu_intr_type_t esp_cpu_intr_get_type(int intr_num)
 {
     assert(intr_num >= 0 && intr_num < SOC_CPU_INTR_NUM);
-    enum intr_type type = esprv_intc_int_get_type(intr_num);
+    enum intr_type type = esprv_int_get_type(intr_num);
     return (type == INTR_TYPE_LEVEL) ? ESP_CPU_INTR_TYPE_LEVEL : ESP_CPU_INTR_TYPE_EDGE;
 }
 
@@ -275,7 +391,7 @@ FORCE_INLINE_ATTR esp_cpu_intr_type_t esp_cpu_intr_get_type(int intr_num)
 FORCE_INLINE_ATTR void esp_cpu_intr_set_priority(int intr_num, int intr_priority)
 {
     assert(intr_num >= 0 && intr_num < SOC_CPU_INTR_NUM);
-    esprv_intc_int_set_priority(intr_num, intr_priority);
+    esprv_int_set_priority(intr_num, intr_priority);
 }
 
 /**
@@ -290,7 +406,7 @@ FORCE_INLINE_ATTR void esp_cpu_intr_set_priority(int intr_num, int intr_priority
 FORCE_INLINE_ATTR int esp_cpu_intr_get_priority(int intr_num)
 {
     assert(intr_num >= 0 && intr_num < SOC_CPU_INTR_NUM);
-    return esprv_intc_int_get_priority(intr_num);
+    return esprv_int_get_priority(intr_num);
 }
 #endif // SOC_CPU_HAS_FLEXIBLE_INTC
 
@@ -312,7 +428,7 @@ FORCE_INLINE_ATTR bool esp_cpu_intr_has_handler(int intr_num)
 #ifdef __XTENSA__
     has_handler = xt_int_has_handler(intr_num, esp_cpu_get_core_id());
 #else
-    has_handler = intr_handler_get(intr_num);
+    has_handler = intr_handler_get(intr_num) != NULL;
 #endif
     return has_handler;
 }
@@ -340,12 +456,12 @@ FORCE_INLINE_ATTR void esp_cpu_intr_set_handler(int intr_num, esp_cpu_intr_handl
 }
 
 /**
- * @brief Get a handler function's argument of
+ * @brief Get a handler function's argument
  *
  * Get the argument of a previously assigned handler function on the current CPU.
  *
  * @param intr_num Interrupt number (from 0 to 31)
- * @return The the argument passed to the handler function
+ * @return The argument passed to the handler function
  */
 FORCE_INLINE_ATTR void *esp_cpu_intr_get_handler_arg(int intr_num)
 {
@@ -399,7 +515,12 @@ FORCE_INLINE_ATTR uint32_t esp_cpu_intr_get_enabled_mask(void)
 #ifdef __XTENSA__
     return xt_utils_intr_get_enabled_mask();
 #else
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD && SOC_INT_CLIC_SUPPORTED
+    extern esprv_int_mgmt_t esp_tee_intr_sec_srv_cb;
+    return esp_tee_intr_sec_srv_cb(1, SS_RV_UTILS_INTR_GET_ENABLED_MASK);
+#else
     return rv_utils_intr_get_enabled_mask();
+#endif
 #endif
 }
 
@@ -412,9 +533,14 @@ FORCE_INLINE_ATTR void esp_cpu_intr_edge_ack(int intr_num)
 {
     assert(intr_num >= 0 && intr_num < SOC_CPU_INTR_NUM);
 #ifdef __XTENSA__
-    xthal_set_intclear(1 << intr_num);
+    xthal_set_intclear((unsigned) (1 << intr_num));
 #else
-    rv_utils_intr_edge_ack(intr_num);
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+    extern esprv_int_mgmt_t esp_tee_intr_sec_srv_cb;
+    esp_tee_intr_sec_srv_cb(2, SS_RV_UTILS_INTR_EDGE_ACK, intr_num);
+#else
+    rv_utils_intr_edge_ack((unsigned) intr_num);
+#endif
 #endif
 }
 
@@ -443,7 +569,10 @@ void esp_cpu_configure_region_protection(void);
  * @note Overwrites previously set breakpoint with same breakpoint number.
  * @param bp_num Hardware breakpoint number [0..SOC_CPU_BREAKPOINTS_NUM - 1]
  * @param bp_addr Address to set a breakpoint on
- * @return ESP_OK if breakpoint is set. Failure otherwise
+ * @return
+ *      - ESP_OK if the breakpoint is set
+ *      - ESP_ERR_INVALID_ARG if `bp_num` is out of range
+ *      - ESP_ERR_INVALID_RESPONSE if setting the breakpoint via semihosting fails
  */
 esp_err_t esp_cpu_set_breakpoint(int bp_num, const void *bp_addr);
 
@@ -452,7 +581,10 @@ esp_err_t esp_cpu_set_breakpoint(int bp_num, const void *bp_addr);
  *
  * @note Clears a breakpoint regardless of whether it was previously set
  * @param bp_num Hardware breakpoint number [0..SOC_CPU_BREAKPOINTS_NUM - 1]
- * @return ESP_OK if breakpoint is cleared. Failure otherwise
+ * @return
+ *      - ESP_OK if the breakpoint is cleared
+ *      - ESP_ERR_INVALID_ARG if `bp_num` is out of range
+ *      - ESP_ERR_INVALID_RESPONSE if clearing the breakpoint via semihosting fails
  */
 esp_err_t esp_cpu_clear_breakpoint(int bp_num);
 
@@ -466,11 +598,20 @@ esp_err_t esp_cpu_clear_breakpoint(int bp_num);
  * the CPU accesses (according to the trigger type) on a certain memory range.
  *
  * @note Overwrites previously set watchpoint with same watchpoint number.
+ *       On RISC-V chips, this API uses method0(Exact matching) and method1(NAPOT matching) according to the
+ *       riscv-debug-spec-0.13 specification for address matching.
+ *       If the watch region size is 1byte, it uses exact matching (method 0).
+ *       If the watch region size is larger than 1byte, it uses NAPOT matching (method 1). This mode requires
+ *       the watching region start address to be aligned to the watching region size.
+ *
  * @param wp_num Hardware watchpoint number [0..SOC_CPU_WATCHPOINTS_NUM - 1]
- * @param wp_addr Watchpoint's base address
- * @param size Size of the region to watch. Must be one of 2^n, with n in [0..6].
+ * @param wp_addr Watchpoint's base address, must be naturally aligned to the size of the region
+ * @param size Size of the region to watch. Must be one of 2^n and in the range of [1 ... SOC_CPU_WATCHPOINT_MAX_REGION_SIZE]
  * @param trigger Trigger type
- * @return ESP_ERR_INVALID_ARG on invalid arg, ESP_OK otherwise
+ * @return
+ *      - ESP_OK if the watchpoint is set
+ *      - ESP_ERR_INVALID_ARG if `wp_num`, `wp_addr`, or `size` is invalid
+ *      - ESP_ERR_INVALID_RESPONSE if setting the watchpoint via semihosting fails
  */
 esp_err_t esp_cpu_set_watchpoint(int wp_num, const void *wp_addr, size_t size, esp_cpu_watchpoint_trigger_t trigger);
 
@@ -479,7 +620,10 @@ esp_err_t esp_cpu_set_watchpoint(int wp_num, const void *wp_addr, size_t size, e
  *
  * @note Clears a watchpoint regardless of whether it was previously set
  * @param wp_num Hardware watchpoint number [0..SOC_CPU_WATCHPOINTS_NUM - 1]
- * @return ESP_OK if watchpoint was cleared. Failure otherwise.
+ * @return
+ *      - ESP_OK if the watchpoint is cleared
+ *      - ESP_ERR_INVALID_ARG if `wp_num` is out of range
+ *      - ESP_ERR_INVALID_RESPONSE if clearing the watchpoint via semihosting fails
  */
 esp_err_t esp_cpu_clear_watchpoint(int wp_num);
 
@@ -511,6 +655,29 @@ FORCE_INLINE_ATTR void esp_cpu_dbgr_break(void)
 #endif
 }
 
+// ---------------------- Instructions -------------------------
+
+/**
+ * @brief Given the return address, calculate the address of the preceding call instruction
+ * This is typically used to answer the question "where was the function called from?"
+ * @param return_address  The value of the return address register.
+ *                        Typically set to the value of __builtin_return_address(0).
+ * @return Address of the call instruction preceding the return address.
+ */
+FORCE_INLINE_ATTR intptr_t esp_cpu_get_call_addr(intptr_t return_address)
+{
+    /* Both Xtensa and RISC-V have 2-byte instructions, so to get this right we
+     * should decode the preceding instruction as if it is 2-byte, check if it is a call,
+     * else treat it as 3 or 4 byte one. However for the cases where this function is
+     * used, being off by one instruction is usually okay, so this is kept simple for now.
+     */
+#ifdef __XTENSA__
+    return return_address - 3;
+#else
+    return return_address - 4;
+#endif
+}
+
 /* ------------------------------------------------------ Misc ---------------------------------------------------------
  *
  * ------------------------------------------------------------------------------------------------------------------ */
@@ -525,32 +692,23 @@ FORCE_INLINE_ATTR void esp_cpu_dbgr_break(void)
  */
 bool esp_cpu_compare_and_set(volatile uint32_t *addr, uint32_t compare_value, uint32_t new_value);
 
-/* ---------------------------------------------------- Deprecate ------------------------------------------------------
- *
- * ------------------------------------------------------------------------------------------------------------------ */
-
-/*
-[refactor-todo] Make these deprecated inline
-*/
-typedef esp_cpu_cycle_count_t           esp_cpu_ccount_t;
-#define esp_cpu_get_ccount()            esp_cpu_get_cycle_count()
-#define esp_cpu_set_ccount(ccount)      esp_cpu_set_cycle_count(ccount)
+#if SOC_BRANCH_PREDICTOR_SUPPORTED
+/**
+ * @brief Enable branch prediction
+ */
+FORCE_INLINE_ATTR void esp_cpu_branch_prediction_enable(void)
+{
+    rv_utils_en_branch_predictor();
+}
 
 /**
- * @brief Returns true if a JTAG debugger is attached to CPU OCD (on chip debug) port.
- *
- * [refactor-todo]  See if this can be replaced with esp_cpu_dbgr_is_attached directly
- *
- * @note Always returns false if CONFIG_ESP_DEBUG_OCDAWARE is not enabled
+ * @brief Disable branch prediction
  */
-FORCE_INLINE_ATTR bool esp_cpu_in_ocd_debug_mode(void)
+FORCE_INLINE_ATTR void esp_cpu_branch_prediction_disable(void)
 {
-#if CONFIG_ESP_DEBUG_OCDAWARE
-    return esp_cpu_dbgr_is_attached();
-#else  // CONFIG_ESP_DEBUG_OCDAWARE
-    return false; // Always return false if "OCD aware" is disabled
-#endif // CONFIG_ESP_DEBUG_OCDAWARE
+    rv_utils_dis_branch_predictor();
 }
+#endif  //#if SOC_BRANCH_PREDICTOR_SUPPORTED
 
 #ifdef __cplusplus
 }

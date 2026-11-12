@@ -68,7 +68,9 @@ tHID_STATUS HID_HostGetSDPRecord ( BD_ADDR addr, tSDP_DISCOVERY_DB *p_db, UINT32
     uuid_list.uu.uuid16 = UUID_SERVCLASS_HUMAN_INTERFACE;
 
     hh_cb.p_sdp_db = p_db;
-    SDP_InitDiscoveryDb (p_db, db_len, 1, &uuid_list, 0, NULL);
+    if (!SDP_InitDiscoveryDb (p_db, db_len, 1, &uuid_list, 0, NULL)) {
+        return HID_ERR_NO_RESOURCES;
+    }
 
     if (SDP_ServiceSearchRequest (addr, p_db, hidh_search_callback)) {
         hh_cb.sdp_cback = sdp_cback ;
@@ -378,6 +380,7 @@ tHID_STATUS HID_HostAddDev ( BD_ADDR addr, UINT16 attr_mask, UINT8 *handle )
 
     if (!hh_cb.devices[i].in_use) {
         hh_cb.devices[i].in_use = TRUE;
+        hh_cb.devices[i].delay_remove = FALSE;
         memcpy( hh_cb.devices[i].addr, addr, sizeof( BD_ADDR ) ) ;
         hh_cb.devices[i].state = HID_DEV_NO_CONN;
         hh_cb.devices[i].conn_tries = 0 ;
@@ -443,10 +446,20 @@ tHID_STATUS HID_HostRemoveDev ( UINT8 dev_handle )
     }
 
     HID_HostCloseDev( dev_handle ) ;
-    hh_cb.devices[dev_handle].in_use = FALSE;
-    hh_cb.devices[dev_handle].conn.conn_state = HID_CONN_STATE_UNUSED;
-    hh_cb.devices[dev_handle].conn.ctrl_cid = hh_cb.devices[dev_handle].conn.intr_cid = 0;
-    hh_cb.devices[dev_handle].attr_mask = 0;
+
+    if (hh_cb.devices[dev_handle].conn.conn_state == HID_CONN_STATE_DISCONNECTING_INTR ||
+        hh_cb.devices[dev_handle].conn.conn_state == HID_CONN_STATE_DISCONNECTING_CTRL) {
+        // delay the remove action, to close the control and the interrupt channel
+        hh_cb.devices[dev_handle].delay_remove = TRUE;
+    } else {
+        HIDH_TRACE_WARNING("%s dev_handle:%d conn_state:%d", __func__, dev_handle,
+                           hh_cb.devices[dev_handle].conn.conn_state);
+        hh_cb.devices[dev_handle].in_use = FALSE;
+        hh_cb.devices[dev_handle].conn.conn_state = HID_CONN_STATE_UNUSED;
+        hh_cb.devices[dev_handle].conn.ctrl_cid = hh_cb.devices[dev_handle].conn.intr_cid = 0;
+        hh_cb.devices[dev_handle].attr_mask = 0;
+    }
+
     return HID_SUCCESS;
 }
 
@@ -547,11 +560,10 @@ tHID_STATUS HID_HostCloseDev( UINT8 dev_handle )
         return HID_ERR_NO_CONNECTION;
     }
 
-    hh_cb.devices[dev_handle].conn_tries = HID_HOST_MAX_CONN_RETRY + 1;
     return hidh_conn_disconnect( dev_handle );
 }
 
-tHID_STATUS HID_HostSetSecurityLevel( char serv_name[], UINT8 sec_lvl )
+tHID_STATUS HID_HostSetSecurityLevel( const char *serv_name, UINT8 sec_lvl )
 {
     if (!BTM_SetSecurityLevel (FALSE, serv_name, BTM_SEC_SERVICE_HIDH_SEC_CTRL,
                                sec_lvl, HID_PSM_CONTROL, BTM_SEC_PROTO_HID, HID_SEC_CHN)) {
@@ -638,6 +650,30 @@ BOOLEAN hid_known_hid_device (BD_ADDR bd_addr)
     /* Check if this device is marked as HID Device in IOP Dev */
     HIDH_TRACE_DEBUG("hid_known_hid_device:remote is not HID device");
     return FALSE;
+}
+
+BOOLEAN HID_HostConnectOrig(UINT8 dev_handle)
+{
+    BOOLEAN ret = FALSE;
+
+    do {
+#if (HID_DYNAMIC_MEMORY)
+        if (!hidh_cb_ptr) {
+            break;
+        }
+#endif
+        if (!hh_cb.reg_flag) {
+            break;
+        }
+
+        if ((dev_handle >= HID_HOST_MAX_DEVICES) || (!hh_cb.devices[dev_handle].in_use)) {
+            break;
+        }
+
+        ret = hidh_conn_is_orig(dev_handle);
+    } while (0);
+
+    return ret;
 }
 
 #endif //HID_HOST_INCLUDED

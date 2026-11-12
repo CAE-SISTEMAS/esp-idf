@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -54,11 +54,14 @@ UINT32 devclass2uint(DEV_CLASS dev_class);
 void uint2devclass(UINT32 dev, DEV_CLASS dev_class);
 void uuid128_be_to_esp_uuid(esp_bt_uuid_t *u, uint8_t* uuid128);
 
-void uuid_to_string_legacy(bt_uuid_t *p_uuid, char *str);
+void uuid_to_string_legacy(const bt_uuid_t *p_uuid, char *str);
 
 esp_bt_status_t btc_hci_to_esp_status(uint8_t hci_status);
-esp_bt_status_t btc_btm_status_to_esp_status (uint8_t btm_status);
-esp_bt_status_t btc_bta_status_to_esp_status (uint8_t bta_status);
+esp_bt_status_t btc_btm_status_to_esp_status(uint8_t btm_status);
+esp_bt_status_t btc_bta_status_to_esp_status(uint8_t bta_status);
+
+void bta_to_btc_uuid(esp_bt_uuid_t *p_dest, tBT_UUID *p_src);
+void btc_to_bta_uuid(tBT_UUID *p_dest, esp_bt_uuid_t *p_src);
 
 #ifdef __cplusplus
 }

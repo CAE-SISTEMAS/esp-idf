@@ -150,12 +150,9 @@ int wpas_rrm_send_neighbor_rep_request(struct wpa_supplicant *wpa_s,
 
 	/* Refuse if there's a live request */
 	if (wpa_s->rrm.notify_neighbor_rep) {
-		wpas_rrm_neighbor_rep_timeout_handler(&wpa_s->rrm, NULL);
-#if 0
 		wpa_dbg(wpa_s, MSG_DEBUG,
 			"RRM: Currently handling previous Neighbor Report.");
 		return -EBUSY;
-#endif
 	}
 
 	/* 3 = action category + action code + dialog token */
@@ -965,7 +962,6 @@ wpas_rrm_process_msr_req_elems(struct wpa_supplicant *wpa_s, const u8 *pos,
 			wpa_printf(MSG_DEBUG,
 				   "RRM: Expected Measurement Request element, but EID is %u",
 				   req->eid);
-			printf("len is %d", len);
 			goto out;
 		}
 

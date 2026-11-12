@@ -483,15 +483,25 @@ struct tlsv1_client * tlsv1_client_init(void)
 
 	count = 0;
 	suites = conn->cipher_suites;
+#ifdef CONFIG_CRYPTO_MBEDTLS
 	suites[count++] = TLS_DHE_RSA_WITH_AES_256_CBC_SHA256;
+#endif
 	suites[count++] = TLS_RSA_WITH_AES_256_CBC_SHA256;
+#ifdef CONFIG_CRYPTO_MBEDTLS
 	suites[count++] = TLS_DHE_RSA_WITH_AES_256_CBC_SHA;
+#endif
 	suites[count++] = TLS_RSA_WITH_AES_256_CBC_SHA;
+#ifdef CONFIG_CRYPTO_MBEDTLS
 	suites[count++] = TLS_DHE_RSA_WITH_AES_128_CBC_SHA256;
+#endif
 	suites[count++] = TLS_RSA_WITH_AES_128_CBC_SHA256;
+#ifdef CONFIG_CRYPTO_MBEDTLS
 	suites[count++] = TLS_DHE_RSA_WITH_AES_128_CBC_SHA;
+#endif
 	suites[count++] = TLS_RSA_WITH_AES_128_CBC_SHA;
+#ifdef CONFIG_CRYPTO_MBEDTLS
 	suites[count++] = TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA;
+#endif
 	suites[count++] = TLS_RSA_WITH_3DES_EDE_CBC_SHA;
 	suites[count++] = TLS_RSA_WITH_RC4_128_SHA;
 	suites[count++] = TLS_RSA_WITH_RC4_128_MD5;
@@ -604,7 +614,7 @@ int tlsv1_client_prf(struct tlsv1_client *conn, const char *label,
 int tlsv1_client_get_cipher(struct tlsv1_client *conn, char *buf,
 			    size_t buflen)
 {
-	char *cipher;
+	const char *cipher;
 
 	switch (conn->rl.cipher_suite) {
 	case TLS_RSA_WITH_RC4_128_MD5:

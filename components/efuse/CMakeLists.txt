@@ -1,4 +1,5 @@
 idf_build_get_property(target IDF_TARGET)
+idf_build_get_property(non_os_build NON_OS_BUILD)
 
 if(CONFIG_EFUSE_VIRTUAL)
     message(STATUS "Efuse virtual mode is enabled. If Secure boot or Flash encryption is on"
@@ -24,14 +25,53 @@ else()
 endif()
 
 list(APPEND srcs "src/esp_efuse_api.c"
+                 "src/esp_efuse_dump.c"
                  "src/esp_efuse_fields.c"
                  "src/esp_efuse_utility.c"
                  "src/efuse_controller/keys/${type}/esp_efuse_api_key.c")
 
-idf_component_register(SRCS "${srcs}"
-                    PRIV_REQUIRES bootloader_support soc spi_flash
+if(non_os_build)
+    idf_component_register(SRCS "${srcs}"
+                    PRIV_REQUIRES bootloader_support soc esp_hal_security
                     INCLUDE_DIRS "${include_dirs}"
                     PRIV_INCLUDE_DIRS "${private_include}")
+else()
+    list(APPEND srcs "src/esp_efuse_startup.c")
+    set(priv_requires soc esp_system esp_hal_security)
+    if(NOT ${target} STREQUAL "linux" AND NOT IDF_BUILD_V2)
+        list(APPEND priv_requires esp_app_format bootloader_support)
+    endif()
+    if(NOT IDF_BUILD_V2)
+        # V1 resolves requirements before Kconfig is available.
+        list(APPEND priv_requires esp_partition)
+    endif()
+    idf_component_register(SRCS "${srcs}"
+                    PRIV_REQUIRES "${priv_requires}"
+                    INCLUDE_DIRS "${include_dirs}"
+                    PRIV_INCLUDE_DIRS "${private_include}")
+    if(IDF_BUILD_V2)
+        if(CONFIG_EFUSE_VIRTUAL_KEEP_IN_FLASH)
+            idf_component_include(esp_partition)
+            target_link_libraries(${COMPONENT_LIB} PRIVATE idf::esp_partition)
+        endif()
+        if(NOT ${target} STREQUAL "linux")
+            if(CONFIG_EFUSE_VIRTUAL_KEEP_IN_FLASH OR CONFIG_SECURE_BOOT OR
+               CONFIG_SECURE_FLASH_ENC_ENABLED OR CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT)
+                idf_component_include(bootloader_support)
+                target_link_libraries(${COMPONENT_LIB} PRIVATE idf::bootloader_support)
+            endif()
+            if(CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK)
+                idf_component_include(esp_app_format)
+                target_link_libraries(${COMPONENT_LIB} PRIVATE idf::esp_app_format)
+            endif()
+        endif()
+    endif()
+    idf_define_esp_err_codes(HEADERS include/esp_efuse.h)
+    if(NOT ${target} STREQUAL "linux")
+        # Forces the linker to include esp_efuse_startup.c
+        target_link_libraries(${COMPONENT_LIB} INTERFACE "-u esp_efuse_startup_include_func")
+    endif()
+endif()
 
 if(target)
     set(TOOL_TARGET -t ${target})

@@ -24,7 +24,7 @@ cmake_ver_minor=$(get_ver_from_cmake IDF_VERSION_MINOR)
 cmake_ver_patch=$(get_ver_from_cmake IDF_VERSION_PATCH)
 version_from_cmake="${cmake_ver_major}.${cmake_ver_minor}.${cmake_ver_patch}"
 
-git_desc=$(git describe)
+git_desc=$(git describe --exclude 'qa-test-*')
 git_desc_regex="^v([0-9]+)\.([0-9]+)(\.([0-9]+))?.*$"
 if [[ ! ${git_desc} =~ ${git_desc_regex} ]]; then
     echo "Could not determine the version from 'git describe' output: ${git_desc}"
@@ -43,5 +43,26 @@ fi
 
 if [[ "${version_from_cmake}" != "${version_from_git}" ]]; then
     echo "version.cmake does not match 'git describe' output"
+    exit 1
+fi
+
+echo "Checking if ESP-TEE version in esp_tee_version.h matches version.cmake"
+
+function get_tee_ver_from_header() {
+    grep -E "^#define ${1}" components/esp_tee/include/esp_tee_version.h | awk '{print $3;}'
+}
+
+function get_tee_ver_from_cmake() {
+    grep -E "^set\(${1}" components/esp_tee/version.cmake | sed -En "s/set\(${1} ([0-9]+)\)/\1/p"
+}
+
+tee_ver_from_header="$(get_tee_ver_from_header ESP_TEE_VERSION_MAJOR).$(get_tee_ver_from_header ESP_TEE_VERSION_MINOR).$(get_tee_ver_from_header ESP_TEE_VERSION_PATCH)"
+tee_ver_from_cmake="$(get_tee_ver_from_cmake ESP_TEE_VERSION_MAJOR).$(get_tee_ver_from_cmake ESP_TEE_VERSION_MINOR).$(get_tee_ver_from_cmake ESP_TEE_VERSION_PATCH)"
+
+echo "From esp_tee_version.h: ${tee_ver_from_header}"
+echo "From components/esp_tee/version.cmake: ${tee_ver_from_cmake}"
+
+if [[ "${tee_ver_from_header}" != "${tee_ver_from_cmake}" ]]; then
+    echo "esp_tee_version.h does not match components/esp_tee/version.cmake"
     exit 1
 fi

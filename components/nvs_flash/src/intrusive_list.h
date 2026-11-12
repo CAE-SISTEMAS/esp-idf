@@ -1,10 +1,9 @@
 /*
- * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#ifndef intrusive_list_h
-#define intrusive_list_h
+#pragma once
 
 #include <cassert>
 #include <unordered_map>
@@ -30,9 +29,14 @@ class intrusive_list
 
 public:
 
-    class iterator : public std::iterator<std::forward_iterator_tag, T>
+    class iterator
     {
     public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = T;
+        using difference_type = ptrdiff_t;
+        using pointer = T*;
+        using reference = T&;
 
         iterator() : mPos(nullptr) {}
 
@@ -246,6 +250,3 @@ protected:
     T* mLast = nullptr;
     size_t mSize = 0;
 };
-
-
-#endif /* intrusive_list_h */

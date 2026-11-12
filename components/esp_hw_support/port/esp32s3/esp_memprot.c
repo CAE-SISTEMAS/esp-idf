@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -17,6 +17,7 @@
 #include "hal/memprot_types.h"
 #include "esp_private/esp_memprot_internal.h"
 #include "esp_memprot.h"
+#include <inttypes.h>
 
 /*
  * LD section boundaries
@@ -124,7 +125,7 @@ esp_err_t esp_mprot_set_split_addr(const esp_mprot_mem_t mem_type, const esp_mpr
         if (line_type == MEMPROT_SPLIT_ADDR_MAIN) { /* so far only WORLD_0 is supported */
             esp_err_t err;
             ESP_MEMPROT_ERR_CHECK(err, esp_mprot_cpuid_valid(core))
-            ESP_MEMPROT_ERR_CHECK(err, esp_mprot_ll_err_to_esp_err(memprot_ll_set_rtcfast_split_line(core, line_addr, MEMP_LL_WORLD_0)))
+            ESP_MEMPROT_ERR_CHECK(err, esp_mprot_ll_err_to_esp_err(memprot_ll_set_rtcfast_split_line(core, line_addr, MEMP_HAL_WORLD_0)))
             return ESP_OK;
         } else {
             return ESP_ERR_MEMPROT_SPLIT_ADDR_INVALID;
@@ -171,7 +172,7 @@ esp_err_t esp_mprot_get_split_addr(const esp_mprot_mem_t mem_type, const esp_mpr
         if (line_type == MEMPROT_SPLIT_ADDR_MAIN) { /* so far only WORLD_0 is supported */
             esp_err_t err;
             ESP_MEMPROT_ERR_CHECK(err, esp_mprot_cpuid_valid(core))
-            ESP_MEMPROT_ERR_CHECK(err, esp_mprot_ll_err_to_esp_err(memprot_ll_get_rtcfast_split_line(core, MEMP_LL_WORLD_0, *line_addr)))
+            ESP_MEMPROT_ERR_CHECK(err, esp_mprot_ll_err_to_esp_err(memprot_ll_get_rtcfast_split_line(core, MEMP_HAL_WORLD_0, line_addr)))
         } else {
             return ESP_ERR_MEMPROT_SPLIT_ADDR_INVALID;
         }
@@ -328,11 +329,17 @@ esp_err_t esp_mprot_set_pms_area(const esp_mprot_pms_area_t area_type, const uin
         break;
     case MEMPROT_PMS_AREA_IRAM0_RTCFAST_LO:
         ESP_MEMPROT_ERR_CHECK(err, esp_mprot_cpuid_valid(core))
-        ESP_MEMPROT_ERR_CHECK(err, esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_set_pms_area(core, r, w, x, MEMP_LL_WORLD_0, MEMP_LL_AREA_LOW)))
+        ESP_MEMPROT_ERR_CHECK(err, esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_set_pms_area(core, r, w, x, MEMP_HAL_WORLD_0, MEMP_HAL_AREA_LOW)))
         break;
     case MEMPROT_PMS_AREA_IRAM0_RTCFAST_HI:
         ESP_MEMPROT_ERR_CHECK(err, esp_mprot_cpuid_valid(core))
-        ESP_MEMPROT_ERR_CHECK(err, esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_set_pms_area(core, r, w, x, MEMP_LL_WORLD_0, MEMP_LL_AREA_HIGH)))
+        ESP_MEMPROT_ERR_CHECK(err, esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_set_pms_area(core, r, w, x, MEMP_HAL_WORLD_0, MEMP_HAL_AREA_HIGH)))
+        break;
+    case MEMPROT_PMS_AREA_ICACHE_0:
+        memprot_ll_icache_set_pms_area_0(r, w, x);
+        break;
+    case MEMPROT_PMS_AREA_ICACHE_1:
+        memprot_ll_icache_set_pms_area_1(r, w, x);
         break;
     default:
         return ESP_ERR_NOT_SUPPORTED;
@@ -379,11 +386,17 @@ esp_err_t esp_mprot_get_pms_area(const esp_mprot_pms_area_t area_type, uint32_t 
         break;
     case MEMPROT_PMS_AREA_IRAM0_RTCFAST_LO:
         ESP_MEMPROT_ERR_CHECK(err, esp_mprot_cpuid_valid(core))
-        ESP_MEMPROT_ERR_CHECK(err, esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_get_pms_area(core, &r, &w, &x, MEMP_LL_WORLD_0, MEMP_LL_AREA_LOW)))
+        ESP_MEMPROT_ERR_CHECK(err, esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_get_pms_area(core, &r, &w, &x, MEMP_HAL_WORLD_0, MEMP_HAL_AREA_LOW)))
         break;
     case MEMPROT_PMS_AREA_IRAM0_RTCFAST_HI:
         ESP_MEMPROT_ERR_CHECK(err, esp_mprot_cpuid_valid(core))
-        ESP_MEMPROT_ERR_CHECK(err, esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_get_pms_area(core, &r, &w, &x, MEMP_LL_WORLD_0, MEMP_LL_AREA_HIGH)))
+        ESP_MEMPROT_ERR_CHECK(err, esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_get_pms_area(core, &r, &w, &x, MEMP_HAL_WORLD_0, MEMP_HAL_AREA_HIGH)))
+        break;
+    case MEMPROT_PMS_AREA_ICACHE_0:
+        memprot_ll_icache_get_pms_area_0(&r, &w, &x);
+        break;
+    case MEMPROT_PMS_AREA_ICACHE_1:
+        memprot_ll_icache_get_pms_area_1(&r, &w, &x);
         break;
     default:
         return ESP_ERR_MEMPROT_MEMORY_TYPE_INVALID;
@@ -502,7 +515,7 @@ esp_err_t esp_mprot_get_monitor_en(esp_mprot_mem_t mem_type, bool *enabled, cons
 //////////////////////////////////////////////////////////////////////////////
 // PMS-violation interrupt handling APIs (IRAM section - called from panic-handler)
 
-esp_err_t IRAM_ATTR esp_mprot_get_active_intr(esp_memp_intr_source_t *active_memp_intr)
+esp_err_t esp_mprot_get_active_intr(esp_memp_intr_source_t *active_memp_intr)
 {
     if (active_memp_intr == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -589,7 +602,7 @@ esp_err_t IRAM_ATTR esp_mprot_get_active_intr(esp_memp_intr_source_t *active_mem
     return ESP_OK;
 }
 
-esp_err_t IRAM_ATTR esp_mprot_monitor_clear_intr(esp_mprot_mem_t mem_type, const int core)
+esp_err_t esp_mprot_monitor_clear_intr(esp_mprot_mem_t mem_type, const int core)
 {
     esp_err_t err;
     ESP_MEMPROT_ERR_CHECK(err, esp_mprot_cpuid_valid(core))
@@ -614,12 +627,13 @@ esp_err_t IRAM_ATTR esp_mprot_monitor_clear_intr(esp_mprot_mem_t mem_type, const
     return ESP_OK;
 }
 
-esp_err_t IRAM_ATTR esp_mprot_is_conf_locked_any(bool *locked)
+esp_err_t esp_mprot_is_conf_locked_any(bool *locked)
 {
     if (locked == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    *locked = false;
     bool lock_on = false;
     esp_err_t err;
 
@@ -683,12 +697,13 @@ esp_err_t IRAM_ATTR esp_mprot_is_conf_locked_any(bool *locked)
     return ESP_OK;
 }
 
-esp_err_t IRAM_ATTR esp_mprot_is_intr_ena_any(bool *enabled)
+esp_err_t esp_mprot_is_intr_ena_any(bool *enabled)
 {
     if (enabled == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    *enabled = false;
     bool ena_on = false;
     esp_err_t err;
 
@@ -728,7 +743,7 @@ esp_err_t IRAM_ATTR esp_mprot_is_intr_ena_any(bool *enabled)
     return ESP_OK;
 }
 
-esp_err_t IRAM_ATTR esp_mprot_get_violate_addr(const esp_mprot_mem_t mem_type, void **fault_addr, const int core)
+esp_err_t esp_mprot_get_violate_addr(const esp_mprot_mem_t mem_type, void **fault_addr, const int core)
 {
     if (fault_addr == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -758,7 +773,7 @@ esp_err_t IRAM_ATTR esp_mprot_get_violate_addr(const esp_mprot_mem_t mem_type, v
     return ESP_OK;
 }
 
-esp_err_t IRAM_ATTR esp_mprot_get_violate_world(const esp_mprot_mem_t mem_type, esp_mprot_pms_world_t *world, const int core)
+esp_err_t esp_mprot_get_violate_world(const esp_mprot_mem_t mem_type, esp_mprot_pms_world_t *world, const int core)
 {
     if (world == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -792,7 +807,7 @@ esp_err_t IRAM_ATTR esp_mprot_get_violate_world(const esp_mprot_mem_t mem_type, 
     return ESP_OK;
 }
 
-esp_err_t IRAM_ATTR esp_mprot_get_violate_operation(const esp_mprot_mem_t mem_type, uint32_t *oper, const int core)
+esp_err_t esp_mprot_get_violate_operation(const esp_mprot_mem_t mem_type, uint32_t *oper, const int core)
 {
     if (oper == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -837,12 +852,12 @@ esp_err_t IRAM_ATTR esp_mprot_get_violate_operation(const esp_mprot_mem_t mem_ty
     return ESP_OK;
 }
 
-bool IRAM_ATTR esp_mprot_has_byte_enables(const esp_mprot_mem_t mem_type)
+bool esp_mprot_has_byte_enables(const esp_mprot_mem_t mem_type)
 {
     return mem_type == MEMPROT_TYPE_DRAM0_SRAM;
 }
 
-esp_err_t IRAM_ATTR esp_mprot_get_violate_byte_enables(const esp_mprot_mem_t mem_type, uint32_t *byte_en, const int core)
+esp_err_t esp_mprot_get_violate_byte_enables(const esp_mprot_mem_t mem_type, uint32_t *byte_en, const int core)
 {
     if (byte_en == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -875,8 +890,8 @@ esp_err_t esp_mprot_set_prot(const esp_memp_config_t *memp_config)
     // 1.check the signal repeatedly to avoid possible glitching attempt
     // 2.leave the Memprot unset to allow debug operations
 
-    if (esp_cpu_in_ocd_debug_mode()) {
-        ESP_FAULT_ASSERT(esp_cpu_in_ocd_debug_mode());
+    if (esp_cpu_dbgr_is_attached()) {
+        ESP_FAULT_ASSERT(esp_cpu_dbgr_is_attached());
         return ESP_OK;
     }
 
@@ -887,7 +902,7 @@ esp_err_t esp_mprot_set_prot(const esp_memp_config_t *memp_config)
     if (memp_config->mem_type_mask == MEMPROT_TYPE_NONE) {
         return ESP_ERR_NO_MEM;
     }
-    if (memp_config->target_cpu_count < 1 || memp_config->target_cpu_count > portNUM_PROCESSORS) {
+    if (memp_config->target_cpu_count < 1 || memp_config->target_cpu_count > CONFIG_FREERTOS_NUMBER_OF_CORES) {
         return ESP_ERR_MEMPROT_CPUID_INVALID;
     }
 
@@ -955,6 +970,12 @@ esp_err_t esp_mprot_set_prot(const esp_memp_config_t *memp_config)
     //set permissions
     if (use_iram0) {
         ret = ESP_OK;
+        ESP_MEMPROT_ERR_CHECK(ret, esp_mprot_set_pms_area(MEMPROT_PMS_AREA_ICACHE_0, MEMPROT_OP_NONE, DEFAULT_CPU_NUM));
+#if CONFIG_ESP32S3_INSTRUCTION_CACHE_16KB
+        ESP_MEMPROT_ERR_CHECK(ret, esp_mprot_set_pms_area(MEMPROT_PMS_AREA_ICACHE_1, MEMPROT_OP_READ | MEMPROT_OP_EXEC, DEFAULT_CPU_NUM));
+#else
+        ESP_MEMPROT_ERR_CHECK(ret, esp_mprot_set_pms_area(MEMPROT_PMS_AREA_ICACHE_1, MEMPROT_OP_NONE, DEFAULT_CPU_NUM));
+#endif
         ESP_MEMPROT_ERR_CHECK(ret, esp_mprot_set_pms_area(MEMPROT_PMS_AREA_IRAM0_0, MEMPROT_OP_READ | MEMPROT_OP_EXEC, DEFAULT_CPU_NUM))
         ESP_MEMPROT_ERR_CHECK(ret, esp_mprot_set_pms_area(MEMPROT_PMS_AREA_IRAM0_1, MEMPROT_OP_READ | MEMPROT_OP_EXEC, DEFAULT_CPU_NUM))
         ESP_MEMPROT_ERR_CHECK(ret, esp_mprot_set_pms_area(MEMPROT_PMS_AREA_IRAM0_2, MEMPROT_OP_READ | MEMPROT_OP_EXEC, DEFAULT_CPU_NUM))
@@ -978,7 +999,7 @@ esp_err_t esp_mprot_set_prot(const esp_memp_config_t *memp_config)
         }
     }
 
-    //reenable the protection
+    //re-enable the protection
     if (use_iram0) {
         for (size_t x = 0; x < core_count; x++) {
             ESP_MEMPROT_ERR_CHECK(ret, esp_mprot_monitor_clear_intr(MEMPROT_TYPE_IRAM0_SRAM, memp_config->target_cpu[x]))
@@ -1024,7 +1045,6 @@ esp_err_t esp_mprot_set_prot(const esp_memp_config_t *memp_config)
         }
     }
 
-    //sanity check (RTC FAST tbd within IDF-5208)
     if (use_iram0 || use_dram0) {
 
         uint32_t check_val;
@@ -1034,19 +1054,19 @@ esp_err_t esp_mprot_set_prot(const esp_memp_config_t *memp_config)
 
         if (memprot_ll_get_iram0_split_line_main_I_D_regval() != check_val) {
             esp_rom_printf(
-                "Fatal error: Main I/D split line configuration corrupted (expected 0x%08X, stored 0x%08X)\n",
+                "Fatal error: Main I/D split line configuration corrupted (expected 0x%08" PRIX32 ", stored 0x%08" PRIX32 ")\n",
                 check_val, memprot_ll_get_iram0_split_line_main_I_D_regval());
             abort();
         }
         if (memprot_ll_get_iram0_split_line_main_I_0_regval() != check_val) {
             esp_rom_printf(
-                "Fatal error: IRAM0 I_0 split line configuration corrupted (expected 0x%08X, stored 0x%08X)\n",
+                "Fatal error: IRAM0 I_0 split line configuration corrupted (expected 0x%08" PRIX32 ", stored 0x%08" PRIX32 ")\n",
                 check_val, memprot_ll_get_iram0_split_line_main_I_0_regval());
             abort();
         }
         if (memprot_ll_get_iram0_split_line_main_I_1_regval() != check_val) {
             esp_rom_printf(
-                "Fatal error: IRAM0 I_1 split line configuration corrupted (expected 0x%08X, stored 0x%08X)\n",
+                "Fatal error: IRAM0 I_1 split line configuration corrupted (expected 0x%08" PRIX32 ", stored 0x%08" PRIX32 ")\n",
                 check_val, memprot_ll_get_iram0_split_line_main_I_1_regval());
             abort();
         }
@@ -1056,13 +1076,13 @@ esp_err_t esp_mprot_set_prot(const esp_memp_config_t *memp_config)
 
         if (memprot_ll_get_dram0_split_line_main_D_0_regval() != check_val) {
             esp_rom_printf(
-                "Fatal error: DRAM0 D_0 split line configuration corrupted (expected 0x%08X, stored 0x%08X)\n",
+                "Fatal error: DRAM0 D_0 split line configuration corrupted (expected 0x%08" PRIX32 ", stored 0x%08" PRIX32 ")\n",
                 check_val, memprot_ll_get_dram0_split_line_main_D_0_regval());
             abort();
         }
         if (memprot_ll_get_dram0_split_line_main_D_1_regval() != check_val) {
             esp_rom_printf(
-                "Fatal error: DRAM0 D_1 split line configuration corrupted (expected 0x%08X, stored 0x%08X)\n",
+                "Fatal error: DRAM0 D_1 split line configuration corrupted (expected 0x%08" PRIX32 ", stored 0x%08" PRIX32 ")\n",
                 check_val, memprot_ll_get_dram0_split_line_main_D_1_regval());
             abort();
         }
@@ -1070,58 +1090,58 @@ esp_err_t esp_mprot_set_prot(const esp_memp_config_t *memp_config)
         //IRAM0 perms
         ESP_MEMPROT_ERR_CHECK(ret, esp_mprot_get_pms_area(MEMPROT_PMS_AREA_IRAM0_0, &check_val, DEFAULT_CPU_NUM))
         if (check_val != (MEMPROT_OP_READ | MEMPROT_OP_EXEC)) {
-            esp_rom_printf("Fatal error: IRAM0 PMS AREA_0 configuration corrupted (expected 0x%08X, stored 0x%08X)\n",
-                           MEMPROT_OP_READ | MEMPROT_OP_EXEC, check_val);
+            esp_rom_printf("Fatal error: IRAM0 PMS AREA_0 configuration corrupted (expected 0x%08" PRIX32 ", stored 0x%08" PRIX32 ")\n",
+                           (uint32_t)MEMPROT_OP_READ | MEMPROT_OP_EXEC, check_val);
             abort();
         }
 
         ESP_MEMPROT_ERR_CHECK(ret, esp_mprot_get_pms_area(MEMPROT_PMS_AREA_IRAM0_1, &check_val, DEFAULT_CPU_NUM))
         if (check_val != (MEMPROT_OP_READ | MEMPROT_OP_EXEC)) {
-            esp_rom_printf("Fatal error: IRAM0 PMS AREA_1 configuration corrupted (expected 0x%08X, stored 0x%08X)\n",
-                           MEMPROT_OP_READ | MEMPROT_OP_EXEC, check_val);
+            esp_rom_printf("Fatal error: IRAM0 PMS AREA_1 configuration corrupted (expected 0x%08" PRIX32 ", stored 0x%08" PRIX32 ")\n",
+                           (uint32_t)MEMPROT_OP_READ | MEMPROT_OP_EXEC, check_val);
             abort();
         }
 
         ESP_MEMPROT_ERR_CHECK(ret, esp_mprot_get_pms_area(MEMPROT_PMS_AREA_IRAM0_2, &check_val, DEFAULT_CPU_NUM))
         if (check_val != (MEMPROT_OP_READ | MEMPROT_OP_EXEC)) {
-            esp_rom_printf("Fatal error: IRAM0 PMS AREA_2 configuration corrupted (expected 0x%08X, stored 0x%08X)\n",
-                           MEMPROT_OP_READ | MEMPROT_OP_EXEC, check_val);
+            esp_rom_printf("Fatal error: IRAM0 PMS AREA_2 configuration corrupted (expected 0x%08" PRIX32 ", stored 0x%08" PRIX32 ")\n",
+                           (uint32_t)MEMPROT_OP_READ | MEMPROT_OP_EXEC, check_val);
             abort();
         }
 
         ESP_MEMPROT_ERR_CHECK(ret, esp_mprot_get_pms_area(MEMPROT_PMS_AREA_IRAM0_3, &check_val, DEFAULT_CPU_NUM))
         if (check_val != MEMPROT_OP_NONE) {
-            esp_rom_printf("Fatal error: IRAM0 PMS AREA_3 configuration corrupted (expected 0x%08X, stored 0x%08X)\n",
-                           MEMPROT_OP_NONE, check_val);
+            esp_rom_printf("Fatal error: IRAM0 PMS AREA_3 configuration corrupted (expected 0x%08" PRIX32 ", stored 0x%08" PRIX32 ")\n",
+                          (uint32_t) MEMPROT_OP_NONE, check_val);
             abort();
         }
 
         //DRAM0 perms
         ESP_MEMPROT_ERR_CHECK(ret, esp_mprot_get_pms_area(MEMPROT_PMS_AREA_DRAM0_0, &check_val, DEFAULT_CPU_NUM))
         if (check_val != MEMPROT_OP_READ) {
-            esp_rom_printf("Fatal error: DRAM0 PMS AREA_0 configuration corrupted (expected 0x%08X, stored 0x%08X)\n",
-                           MEMPROT_OP_READ, check_val);
+            esp_rom_printf("Fatal error: DRAM0 PMS AREA_0 configuration corrupted (expected 0x%08" PRIX32 ", stored 0x%08" PRIX32 ")\n",
+                           (uint32_t)MEMPROT_OP_READ, check_val);
             abort();
         }
 
         ESP_MEMPROT_ERR_CHECK(ret, esp_mprot_get_pms_area(MEMPROT_PMS_AREA_DRAM0_1, &check_val, DEFAULT_CPU_NUM))
         if (check_val != (MEMPROT_OP_READ | MEMPROT_OP_WRITE)) {
-            esp_rom_printf("Fatal error: DRAM0 PMS AREA_1 configuration corrupted (expected 0x%08X, stored 0x%08X)\n",
-                           MEMPROT_OP_READ | MEMPROT_OP_WRITE, check_val);
+            esp_rom_printf("Fatal error: DRAM0 PMS AREA_1 configuration corrupted (expected 0x%08" PRIX32 ", stored 0x%08" PRIX32 ")\n",
+                           (uint32_t)MEMPROT_OP_READ | MEMPROT_OP_WRITE, check_val);
             abort();
         }
 
         ESP_MEMPROT_ERR_CHECK(ret, esp_mprot_get_pms_area(MEMPROT_PMS_AREA_DRAM0_2, &check_val, DEFAULT_CPU_NUM))
         if (check_val != (MEMPROT_OP_READ | MEMPROT_OP_WRITE)) {
-            esp_rom_printf("Fatal error: DRAM0 PMS AREA_2 configuration corrupted (expected 0x%08X, stored 0x%08X)\n",
-                           MEMPROT_OP_READ | MEMPROT_OP_WRITE, check_val);
+            esp_rom_printf("Fatal error: DRAM0 PMS AREA_2 configuration corrupted (expected 0x%08" PRIX32 ", stored 0x%08" PRIX32 ")\n",
+                           (uint32_t)MEMPROT_OP_READ | MEMPROT_OP_WRITE, check_val);
             abort();
         }
 
         ESP_MEMPROT_ERR_CHECK(ret, esp_mprot_get_pms_area(MEMPROT_PMS_AREA_DRAM0_3, &check_val, DEFAULT_CPU_NUM))
         if (check_val != (MEMPROT_OP_READ | MEMPROT_OP_WRITE)) {
-            esp_rom_printf("Fatal error: DRAM0 PMS AREA_3 configuration corrupted (expected 0x%08X, stored 0x%08X)\n",
-                           MEMPROT_OP_READ | MEMPROT_OP_WRITE, check_val);
+            esp_rom_printf("Fatal error: DRAM0 PMS AREA_3 configuration corrupted (expected 0x%08" PRIX32 ", stored 0x%08" PRIX32 ")\n",
+                           (uint32_t)MEMPROT_OP_READ | MEMPROT_OP_WRITE, check_val);
             abort();
         }
 
@@ -1233,7 +1253,7 @@ esp_err_t esp_mprot_dump_configuration(char **dump_info_string)
 
     sprintf(*dump_info_string,
             "Memory sections:\n"
-            " _iram_text_start: 0x%08X\n _iram_text_end: 0x%08X\n",
+            " _iram_text_start: 0x%08"PRIX32"\n _iram_text_end: 0x%08"PRIX32"\n",
             (uint32_t)&_iram_text_start, (uint32_t)&_iram_text_end);
 
     uint32_t offset = strlen(*dump_info_string);
@@ -1252,18 +1272,18 @@ esp_err_t esp_mprot_dump_configuration(char **dump_info_string)
 
     sprintf((*dump_info_string + offset),
             "Split line settings (lock=%u):\n"
-            " IRAM0:\n   line ID (main): 0x%08X (cat=0x%08X)\n   line I0: 0x%08X (cat=0x%08X)\n   line I1: 0x%08X (cat=0x%08X)\n"
-            " DRAM0:\n   line D0: 0x%08X (cat=0x%08X)\n   line D1: 0x%08X (cat=0x%08X)\n",
+            " IRAM0:\n   line ID (main): 0x%08"PRIX32" (cat=0x%08"PRIX32")\n   line I0: 0x%08"PRIX32" (cat=0x%08"PRIX32")\n   line I1: 0x%08"PRIX32" (cat=0x%08"PRIX32")\n"
+            " DRAM0:\n   line D0: 0x%08"PRIX32" (cat=0x%08"PRIX32")\n   line D1: 0x%08"PRIX32" (cat=0x%08"PRIX32")\n",
             line_lock, line_ID, line_ID_cat, line_I0, line_I0_cat, line_I1, line_I1_cat, line_D0, line_D0_cat, line_D1, line_D1_cat);
 
     offset = strlen(*dump_info_string);
 
     void *line_RTC = NULL;
-    esp_err_t err = esp_mprot_ll_err_to_esp_err(memprot_ll_get_rtcfast_split_line(PRO_CPU_NUM, MEMP_LL_WORLD_0, &line_RTC));
+    esp_err_t err = esp_mprot_ll_err_to_esp_err(memprot_ll_get_rtcfast_split_line(PRO_CPU_NUM, MEMP_HAL_WORLD_0, &line_RTC));
     if (err != ESP_OK) {
         sprintf((*dump_info_string + offset), " RTCFAST:\n   line main: N/A (world=0) - %s\n", esp_err_to_name(err));
     } else {
-        sprintf((*dump_info_string + offset), " RTCFAST:\n   line main: 0x%08X (world=0)\n", (uint32_t)line_RTC);
+        sprintf((*dump_info_string + offset), " RTCFAST:\n   line main: 0x%08"PRIX32" (world=0)\n", (uint32_t)line_RTC);
     }
     offset = strlen(*dump_info_string);
 
@@ -1301,7 +1321,7 @@ esp_err_t esp_mprot_dump_configuration(char **dump_info_string)
     bool arl0rtc, awl0rtc, axl0rtc;
     bool arh0rtc, awh0rtc, axh0rtc;
 
-    err = esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_get_pms_area(PRO_CPU_NUM, &arl0rtc, &awl0rtc, &axl0rtc, MEMP_LL_WORLD_0, MEMP_LL_AREA_LOW));
+    err = esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_get_pms_area(PRO_CPU_NUM, &arl0rtc, &awl0rtc, &axl0rtc, MEMP_HAL_WORLD_0, MEMP_HAL_AREA_LOW));
     if (err != ESP_OK) {
         sprintf((*dump_info_string + offset), "   area low: N/A - %s\n", esp_err_to_name(err));
     } else {
@@ -1310,7 +1330,7 @@ esp_err_t esp_mprot_dump_configuration(char **dump_info_string)
 
     offset = strlen(*dump_info_string);
 
-    err = esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_get_pms_area(PRO_CPU_NUM, &arh0rtc, &awh0rtc, &axh0rtc, MEMP_LL_WORLD_0, MEMP_LL_AREA_HIGH));
+    err = esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_get_pms_area(PRO_CPU_NUM, &arh0rtc, &awh0rtc, &axh0rtc, MEMP_HAL_WORLD_0, MEMP_HAL_AREA_HIGH));
     if (err != ESP_OK) {
         sprintf((*dump_info_string + offset), "   area high: N/A - %s\n", esp_err_to_name(err));
     } else {
@@ -1328,7 +1348,7 @@ esp_err_t esp_mprot_dump_configuration(char **dump_info_string)
 
         offset = strlen(*dump_info_string);
 
-        err = esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_get_pms_area(APP_CPU_NUM, &arl0rtc, &awl0rtc, &axl0rtc, MEMP_LL_WORLD_0, MEMP_LL_AREA_LOW));
+        err = esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_get_pms_area(APP_CPU_NUM, &arl0rtc, &awl0rtc, &axl0rtc, MEMP_HAL_WORLD_0, MEMP_HAL_AREA_LOW));
         if (err != ESP_OK) {
             sprintf((*dump_info_string + offset), "   area low: N/A - %s\n", esp_err_to_name(err));
         } else {
@@ -1337,7 +1357,7 @@ esp_err_t esp_mprot_dump_configuration(char **dump_info_string)
 
         offset = strlen(*dump_info_string);
 
-        err = esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_get_pms_area(APP_CPU_NUM, &arh0rtc, &awh0rtc, &axh0rtc, MEMP_LL_WORLD_0, MEMP_LL_AREA_HIGH));
+        err = esp_mprot_ll_err_to_esp_err(memprot_ll_rtcfast_get_pms_area(APP_CPU_NUM, &arh0rtc, &awh0rtc, &axh0rtc, MEMP_HAL_WORLD_0, MEMP_HAL_AREA_HIGH));
         if (err != ESP_OK) {
             sprintf((*dump_info_string + offset), "   area high: N/A - %s\n", esp_err_to_name(err));
         } else {

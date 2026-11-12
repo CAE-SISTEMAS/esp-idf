@@ -6,21 +6,15 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * SPDX-FileContributor: 2016-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileContributor: 2016-2024 Espressif Systems (Shanghai) CO LTD
  */
 #pragma once
 
 #include "aes/esp_aes.h"
-#include "mbedtls/cipher.h"
-#include "soc/lldesc.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-
-#define MBEDTLS_ERR_GCM_AUTH_FAILED      -0x0012  /**< Authenticated decryption failed. */
-#define MBEDTLS_ERR_GCM_BAD_INPUT        -0x0014  /**< Bad input parameters to function.*/
 
 typedef enum {
     ESP_AES_GCM_STATE_INIT,
@@ -46,6 +40,12 @@ typedef struct {
     const unsigned char *aad;             /*!< The additional data. */
     esp_aes_context aes_ctx;
     esp_aes_gcm_state gcm_state;
+    size_t nc_off;                        /*!< CTR keystream offset carried across update calls. */
+    uint8_t stream_block[16];             /*!< CTR keystream residual carried across update calls. */
+    uint8_t ghash_buf[16];                /*!< Partial (< 16 B) block pending GHASH. */
+    size_t ghash_buf_len;                 /*!< Number of valid bytes in ghash_buf (0..15). */
+    /* Software context needed for soft fallback for non-AES ciphers */
+    void *ctx_soft;
 } esp_gcm_context;
 
 
@@ -72,7 +72,7 @@ void esp_aes_gcm_init( esp_gcm_context *ctx);
  * \return          A cipher-specific error code on failure.
  */
 int esp_aes_gcm_setkey( esp_gcm_context *ctx,
-                        mbedtls_cipher_id_t cipher,
+                        int cipher,
                         const unsigned char *key,
                         unsigned int keybits );
 

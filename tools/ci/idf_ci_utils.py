@@ -1,28 +1,21 @@
+# SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 # internal use only for CI
 # some CI related util functions
-#
-# SPDX-FileCopyrightText: 2020-2022 Espressif Systems (Shanghai) CO LTD
-# SPDX-License-Identifier: Apache-2.0
-#
-
-import io
 import logging
 import os
 import subprocess
 import sys
-from contextlib import redirect_stdout
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, List, Optional, Set
+import typing as t
+from functools import cached_property
 
-if TYPE_CHECKING:
-    from _pytest.python import Function
+IDF_PATH: str = os.path.abspath(os.getenv('IDF_PATH', os.path.join(os.path.dirname(__file__), '..', '..')))
 
-IDF_PATH = os.path.abspath(
-    os.getenv('IDF_PATH', os.path.join(os.path.dirname(__file__), '..', '..'))
-)
+# S3 artifact type for app-dir files outside build_*
+APP_EXTRA_S3_ARTIFACT_TYPE = 'app_extra'
 
 
-def get_submodule_dirs(full_path: bool = False) -> List:
+def get_submodule_dirs(full_path: bool = False) -> list[str]:
     """
     To avoid issue could be introduced by multi-os or additional dependency,
     we use python and git to get this output
@@ -57,13 +50,9 @@ def get_submodule_dirs(full_path: bool = False) -> List:
     return dirs
 
 
-def _check_git_filemode(full_path):  # type: (str) -> bool
+def _check_git_filemode(full_path: str) -> bool:
     try:
-        stdout = (
-            subprocess.check_output(['git', 'ls-files', '--stage', full_path])
-            .strip()
-            .decode('utf-8')
-        )
+        stdout = subprocess.check_output(['git', 'ls-files', '--stage', full_path]).strip().decode('utf-8')
     except subprocess.CalledProcessError:
         return True
 
@@ -84,7 +73,7 @@ def is_executable(full_path: str) -> bool:
     return os.access(full_path, os.X_OK)
 
 
-def get_git_files(path: str = IDF_PATH, full_path: bool = False) -> List[str]:
+def get_git_files(path: str = IDF_PATH, full_path: bool = False) -> list[str]:
     """
     Get the result of git ls-files
     :param path: path to run git ls-files
@@ -95,7 +84,7 @@ def get_git_files(path: str = IDF_PATH, full_path: bool = False) -> List[str]:
         # this is a workaround when using under worktree
         # if you're using worktree, when running git commit a new environment variable GIT_DIR would be declared,
         # the value should be <origin_repo_path>/.git/worktrees/<worktree name>
-        # This would effect the return value of `git ls-files`, unset this would use the `cwd`value or its parent
+        # This would affect the return value of `git ls-files`, unset this would use the `cwd`value or its parent
         # folder if no `.git` folder found in `cwd`.
         workaround_env = os.environ.copy()
         workaround_env.pop('GIT_DIR', None)
@@ -111,12 +100,11 @@ def get_git_files(path: str = IDF_PATH, full_path: bool = False) -> List[str]:
     return [os.path.join(path, f) for f in files] if full_path else files
 
 
-def is_in_directory(file_path: str, folder: str) -> bool:
-    return os.path.realpath(file_path).startswith(os.path.realpath(folder) + os.sep)
+def to_list(s: t.Any) -> list[t.Any]:
+    if not s:
+        return []
 
-
-def to_list(s: Any) -> List[Any]:
-    if isinstance(s, (set, tuple)):
+    if isinstance(s, set | tuple):
         return list(s)
 
     if isinstance(s, list):
@@ -125,107 +113,143 @@ def to_list(s: Any) -> List[Any]:
     return [s]
 
 
-@dataclass
-class PytestApp:
-    path: str
-    target: str
-    config: str
+class GitlabYmlConfig:
+    def __init__(self, root_yml_filepath: str = os.path.join(IDF_PATH, '.gitlab-ci.yml')) -> None:
+        self._config: dict[str, t.Any] = {}
+        self._defaults: dict[str, t.Any] = {}
 
-    def __hash__(self) -> int:
-        return hash((self.path, self.target, self.config))
+        self._load(root_yml_filepath)
+
+    def _load(self, root_yml_filepath: str) -> None:
+        # avoid unused import in other pre-commit hooks
+        import yaml
+
+        merged_yaml = self._compile_via_gitlab_api(root_yml_filepath)
+        all_config = yaml.load(merged_yaml, Loader=yaml.FullLoader) or {}
+
+        if 'default' in all_config:
+            self._defaults = all_config.pop('default')
+
+        self._config = all_config
+
+    def _inline_local_includes(self, root_yml_filepath: str) -> str:
+        """
+        Recursively resolve `include: local` entries straight from disk (so uncommitted local
+        changes are always picked up -- CI runners also work off a disk checkout, so there's no
+        need to fetch a ref remotely via `ci_lint`'s `content_ref`/`ref`/`dry_run_ref` GET
+        params). `include: project` entries (including ones nested inside local files, e.g.
+        `.gitlab/ci/common.yml` including `templates/idf/common-scripts.yml`) are collected and
+        left in the final `include:` list, since those files live in another GitLab project and
+        can only be resolved remotely.
+
+        A dedicated Loader/Dumper pair round-trips `!reference` tags as a marker list subclass,
+        since GitLab CI uses `!reference` which plain YAML doesn't know, and we need to parse
+        (to merge dicts, not just string-concat) then re-dump losslessly.
+
+        :param root_yml_filepath: path to the local root yml file to compile
+        :return: yml content with local includes resolved and merged
+        """
+        import yaml
+
+        class _Loader(yaml.FullLoader):
+            pass
+
+        class _Dumper(yaml.Dumper):
+            pass
+
+        class _Reference(list):
+            pass
+
+        _Loader.add_constructor(
+            '!reference', lambda loader, node: _Reference(loader.construct_sequence(t.cast(yaml.SequenceNode, node)))
+        )
+        _Dumper.add_representer(_Reference, lambda dumper, data: dumper.represent_sequence('!reference', list(data)))
+
+        def resolve(yml_filepath: str) -> tuple[dict, list]:
+            with open(yml_filepath) as fr:
+                data = yaml.load(fr, Loader=_Loader) or {}
+
+            includes = to_list(data.pop('include', None))
+
+            merged: dict = {}
+            remaining_project_includes: list = []
+            for item in includes:
+                if isinstance(item, dict):
+                    if 'project' in item:
+                        remaining_project_includes.append(item)
+                        continue
+                    elif 'local' in item:
+                        local_path = item['local']
+                    else:
+                        continue
+                elif isinstance(item, str):
+                    local_path = item
+                else:
+                    continue
+
+                sub_merged, sub_remaining = resolve(os.path.join(IDF_PATH, local_path.lstrip('/')))
+                merged.update(sub_merged)
+                remaining_project_includes.extend(sub_remaining)
+
+            # this file's own top-level keys override whatever its includes defined
+            merged.update(data)
+            return merged, remaining_project_includes
+
+        merged_config, project_includes = resolve(root_yml_filepath)
+        if project_includes:
+            merged_config['include'] = project_includes
+
+        return yaml.dump(merged_config, Dumper=_Dumper, sort_keys=False)  # type: ignore
+
+    def _compile_via_gitlab_api(self, root_yml_filepath: str) -> str:
+        """
+        Call the GitLab CI Lint API to get the fully compiled (all `include`s resolved) yml,
+        same as what `glab ci config compile` does. This replaces the old recursive local-only
+        parsing, since the project now includes configs from other projects as well.
+
+        :param root_yml_filepath: path to the local root yml file to compile
+        :return: merged (fully resolved) yml content as a string
+        """
+        sys.path.insert(0, os.path.join(IDF_PATH, 'tools', 'ci', 'python_packages'))
+        import gitlab_api
+
+        content = self._inline_local_includes(root_yml_filepath)
+
+        gitlab_inst = gitlab_api.Gitlab()
+        project_id = os.getenv('CI_PROJECT_ID') or gitlab_inst.get_project_id('esp-idf', namespace='espressif')
+        project = gitlab_inst.gitlab_inst.projects.get(project_id, lazy=True)
+
+        lint_result = project.ci_lint.create({'content': content})
+        if not lint_result.valid:
+            raise RuntimeError(f'Failed to compile {root_yml_filepath} via GitLab CI Lint API: {lint_result.errors}')
+
+        return lint_result.merged_yaml  # type: ignore
+
+    @property
+    def default(self) -> dict[str, t.Any]:
+        return self._defaults
+
+    @property
+    def config(self) -> dict[str, t.Any]:
+        return self._config
+
+    @cached_property
+    def global_keys(self) -> list[str]:
+        return ['default', 'include', 'workflow', 'variables', 'stages']
+
+    @cached_property
+    def jobs(self) -> dict[str, t.Any]:
+        return {k: v for k, v in self.config.items() if not k.startswith('.') and k not in self.global_keys}
 
 
-@dataclass
-class PytestCase:
-    path: str
-    name: str
-    apps: Set[PytestApp]
-
-    def __hash__(self) -> int:
-        return hash((self.path, self.name, self.apps))
-
-
-class PytestCollectPlugin:
-    def __init__(self, target: str) -> None:
-        self.target = target
-        self.cases: List[PytestCase] = []
-
-    @staticmethod
-    def get_param(item: 'Function', key: str, default: Any = None) -> Any:
-        if not hasattr(item, 'callspec'):
-            raise ValueError(f'Function {item} does not have params')
-
-        return item.callspec.params.get(key, default) or default
-
-    def pytest_report_collectionfinish(self, items: List['Function']) -> None:
-        from pytest_embedded.plugin import parse_multi_dut_args
-
-        for item in items:
-            count = 1
-            case_path = str(item.path)
-            case_name = item.originalname
-            target = self.target
-            # funcargs is not calculated while collection
-            if hasattr(item, 'callspec'):
-                count = item.callspec.params.get('count', 1)
-                app_paths = to_list(
-                    parse_multi_dut_args(
-                        count,
-                        self.get_param(item, 'app_path', os.path.dirname(case_path)),
-                    )
-                )
-                configs = to_list(
-                    parse_multi_dut_args(
-                        count, self.get_param(item, 'config', 'default')
-                    )
-                )
-                targets = to_list(
-                    parse_multi_dut_args(count, self.get_param(item, 'target', target))
-                )
-            else:
-                app_paths = [os.path.dirname(case_path)]
-                configs = ['default']
-                targets = [target]
-
-            case_apps = set()
-            for i in range(count):
-                case_apps.add(PytestApp(app_paths[i], targets[i], configs[i]))
-
-            self.cases.append(PytestCase(case_path, case_name, case_apps))
-
-
-def get_pytest_cases(
-    folder: str, target: str, marker_expr: Optional[str] = None
-) -> List[PytestCase]:
-    import pytest
-    from _pytest.config import ExitCode
-
-    collector = PytestCollectPlugin(target)
-    if marker_expr:
-        marker_expr = f'{target} and ({marker_expr})'
+def idf_relpath(p: str) -> str:
+    """
+    Turn all paths under IDF_PATH to relative paths
+    :param p: path
+    :return: relpath to IDF_PATH, or absolute path if not under IDF_PATH
+    """
+    abs_path = os.path.abspath(p)
+    if abs_path.startswith(IDF_PATH):
+        return os.path.relpath(abs_path, IDF_PATH)
     else:
-        marker_expr = target  # target is also a marker
-
-    with io.StringIO() as buf:
-        with redirect_stdout(buf):
-            res = pytest.main(
-                ['--collect-only', folder, '-q', '-m', marker_expr], plugins=[collector]
-            )
-        if res.value != ExitCode.OK:
-            if res.value == ExitCode.NO_TESTS_COLLECTED:
-                print(
-                    f'WARNING: no pytest app found for target {target} under folder {folder}'
-                )
-            else:
-                print(buf.getvalue())
-                raise RuntimeError('pytest collection failed')
-
-    return collector.cases
-
-
-def get_pytest_app_paths(
-    folder: str, target: str, marker_expr: Optional[str] = None
-) -> Set[str]:
-    cases = get_pytest_cases(folder, target, marker_expr)
-
-    return set({app.path for case in cases for app in case.apps})
+        return abs_path

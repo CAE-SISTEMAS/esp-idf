@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2017-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2017-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -19,6 +19,15 @@
 #include <stdint.h>
 #include "esp_err.h"
 #include "esp_intr_alloc.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "sdkconfig.h"
+
+#if CONFIG_ESP_TIMER_IN_IRAM
+#define ESP_TIMER_IRAM_ATTR IRAM_ATTR
+#else
+#define ESP_TIMER_IRAM_ATTR
+#endif // CONFIG_ESP_TIMER_IN_IRAM
 
 /**
  * @brief Minimal initialization of platform specific layer of esp_timer
@@ -70,15 +79,6 @@ void esp_timer_impl_set_alarm(uint64_t timestamp);
 void esp_timer_impl_set_alarm_id(uint64_t timestamp, unsigned alarm_id);
 
 /**
- * @brief Notify esp_timer implementation that APB frequency has changed
- *
- * Called by the frequency switching code.
- *
- * @param apb_ticks_per_us new number of APB clock ticks per microsecond
- */
-void esp_timer_impl_update_apb_freq(uint32_t apb_ticks_per_us);
-
-/**
  * @brief Adjust current esp_timer time by a certain value
  *
  * Called from light sleep code to synchronize esp_timer time with RTC time.
@@ -112,7 +112,6 @@ uint64_t esp_timer_impl_get_min_period_us(void);
  */
 void esp_timer_impl_lock(void);
 
-
 /**
  * @brief counterpart of esp_timer_impl_lock
  */
@@ -142,3 +141,29 @@ uint64_t esp_timer_impl_get_alarm_reg(void);
  */
 void esp_timer_impl_init_system_time(void);
 #endif
+
+#if CONFIG_ESP_TIMER_SUPPORTS_ISR_DISPATCH_METHOD
+/**
+ * @brief Check which alarm slots have fired and disarm them.
+ *
+ * For each dispatch method (TASK and ISR), checks if the cached alarm deadline
+ * has expired. If so, clears the deadline (resets to UINT64_MAX) and sets the
+ * corresponding bit in the returned mask. After processing both slots,
+ * reprograms the hardware alarm to the earliest remaining cached deadline.
+ *
+ * Must be called only from ISR context.
+ *
+ * @return Bitmask of the dispatch methods whose alarm was due:
+ *         bit 0 set means the TASK-dispatch alarm fired,
+ *         bit 1 set means the ISR-dispatch alarm fired.
+ */
+uint32_t esp_timer_impl_claim_due_alarms(void);
+#endif
+
+/**
+ * @brief Get the task handle used to dispatch esp_timer task callbacks.
+ *
+ * This is used by linux timer implementations to notify the esp_timer task
+ * without exposing the task handle outside the component implementation.
+ */
+TaskHandle_t esp_timer_impl_get_timer_task_handle(void);

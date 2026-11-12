@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2017-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2017-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -24,16 +24,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/**
- * @brief Notify esp_timer implementation that APB frequency has changed
- *
- * Called by the frequency switching code.
- *
- * @param apb_ticks_per_us new number of APB clock ticks per microsecond
- */
-void esp_timer_private_update_apb_freq(uint32_t apb_ticks_per_us);
-
 /**
  * @brief Set esp_timer time to a certain value
  *
@@ -51,11 +41,11 @@ void esp_timer_private_set(uint64_t new_us);
 void esp_timer_private_advance(int64_t time_diff_us);
 
 /**
- * @brief obtain internal critical section used esp_timer implementation
+ * @brief obtain internal critical section used in the esp_timer implementation
  * This can be used when a sequence of calls to esp_timer has to be made,
  * and it is necessary that the state of the timer is consistent between
  * the calls. Should be treated in the same way as a spinlock.
- * Call esp_timer_unlock to release the lock
+ * Call esp_timer_private_unlock to release the lock
  */
 void esp_timer_private_lock(void);
 

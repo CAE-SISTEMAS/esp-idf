@@ -11,8 +11,11 @@
 #include "esp_err.h"
 #include "esp_memprot_err.h"
 #include "hal/memprot_types.h"
-#include "soc_memprot_types.h"
 #include "esp_memprot_types.h"
+#include "sdkconfig.h"
+#if CONFIG_ESP_SYSTEM_MEMPROT && CONFIG_ESP_SYSTEM_MEMPROT_PMS
+#include "soc_memprot_types.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,12 +24,12 @@ extern "C" {
 /**
 * @brief Convert Memprot low level errors to esp_err_t
 */
-esp_err_t esp_mprot_ll_err_to_esp_err(const memprot_ll_err_t err);
+esp_err_t esp_mprot_ll_err_to_esp_err(const memprot_hal_err_t err);
 
 /**
  * @brief Convert Memprot low level PMS World IDs to esp_mprot_pms_world_t
  */
-esp_mprot_pms_world_t esp_mprot_ll_world_to_hl_world(const memprot_ll_world_t world);
+esp_mprot_pms_world_t esp_mprot_ll_world_to_hl_world(const memprot_hal_world_t world);
 
 /**
  * @brief Converts operation type to string, no combination of operations allowed

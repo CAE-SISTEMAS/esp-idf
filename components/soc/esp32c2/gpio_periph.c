@@ -1,12 +1,13 @@
 /*
- * SPDX-FileCopyrightText: 2020-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 
 #include "soc/gpio_periph.h"
+#include "soc/io_mux_reg.h"
 
-const uint32_t GPIO_PIN_MUX_REG[SOC_GPIO_PIN_COUNT] = {
+const uint32_t GPIO_PIN_MUX_REG[] = {
     IO_MUX_GPIO0_REG,
     IO_MUX_GPIO1_REG,
     IO_MUX_GPIO2_REG,
@@ -30,7 +31,9 @@ const uint32_t GPIO_PIN_MUX_REG[SOC_GPIO_PIN_COUNT] = {
     IO_MUX_GPIO20_REG,
 };
 
-const uint32_t GPIO_HOLD_MASK[SOC_GPIO_PIN_COUNT] = {
+_Static_assert(sizeof(GPIO_PIN_MUX_REG) == SOC_GPIO_PIN_COUNT * sizeof(uint32_t), "Invalid size of GPIO_PIN_MUX_REG");
+
+const uint32_t GPIO_HOLD_MASK[] = {
     BIT(0),          //GPIO0
     BIT(1),          //GPIO1
     BIT(2),          //GPIO2
@@ -53,3 +56,5 @@ const uint32_t GPIO_HOLD_MASK[SOC_GPIO_PIN_COUNT] = {
     BIT(19),         //GPIO19
     BIT(20),         //GPIO20
 };
+
+_Static_assert(sizeof(GPIO_HOLD_MASK) == SOC_GPIO_PIN_COUNT * sizeof(uint32_t), "Invalid size of GPIO_HOLD_MASK");

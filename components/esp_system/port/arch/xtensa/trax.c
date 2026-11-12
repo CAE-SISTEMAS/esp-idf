@@ -1,6 +1,6 @@
 
 /*
- * SPDX-FileCopyrightText: 2020-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,7 +10,7 @@
 #include "esp_log.h"
 #include "xt_trax.h"
 #include "esp_private/trax.h"
-#include "hal/trace_ll.h"
+#include "hal/xtensa_trace_ll.h"
 #include "soc/dport_reg.h"
 #include "soc/tracemem_config.h"
 #include "sdkconfig.h"
@@ -32,10 +32,12 @@ int trax_enable(trax_ena_select_t which)
 #endif
 #if CONFIG_IDF_TARGET_ESP32
 #ifndef CONFIG_ESP32_TRAX_TWOBANKS
-    if (which == TRAX_ENA_PRO_APP || which == TRAX_ENA_PRO_APP_SWAP) return ESP_ERR_NO_MEM;
+    if (which == TRAX_ENA_PRO_APP || which == TRAX_ENA_PRO_APP_SWAP) {
+        return ESP_ERR_NO_MEM;
+    }
 #endif
     if (which == TRAX_ENA_PRO_APP || which == TRAX_ENA_PRO_APP_SWAP) {
-        trace_ll_set_mode((which == TRAX_ENA_PRO_APP_SWAP)?TRACEMEM_MUX_PROBLK1_APPBLK0:TRACEMEM_MUX_PROBLK0_APPBLK1);
+        trace_ll_set_mode((which == TRAX_ENA_PRO_APP_SWAP) ? TRACEMEM_MUX_PROBLK1_APPBLK0 : TRACEMEM_MUX_PROBLK0_APPBLK1);
     } else {
         trace_ll_set_mode(TRACEMEM_MUX_BLK0_ONLY);
     }
@@ -51,16 +53,14 @@ int trax_enable(trax_ena_select_t which)
 #elif CONFIG_IDF_TARGET_ESP32S3
     if (which == TRAX_ENA_PRO) {
         trace_ll_set_mem_block(0, TRACEMEM_MUX_BLK0_NUM);
-    }
-    else if (which == TRAX_ENA_APP) {
+    } else if (which == TRAX_ENA_APP) {
         trace_ll_set_mem_block(1, TRACEMEM_MUX_BLK0_NUM);
     }
 #ifdef CONFIG_ESP32S3_TRAX_TWOBANKS
     else if (which == TRAX_ENA_PRO_APP) {
         trace_ll_set_mem_block(0, TRACEMEM_MUX_BLK0_NUM);
         trace_ll_set_mem_block(1, TRACEMEM_MUX_BLK1_NUM);
-    }
-    else if (which == TRAX_ENA_PRO_APP_SWAP) {
+    } else if (which == TRAX_ENA_PRO_APP_SWAP) {
         trace_ll_set_mem_block(1, TRACEMEM_MUX_BLK0_NUM);
         trace_ll_set_mem_block(0, TRACEMEM_MUX_BLK1_NUM);
     }

@@ -1,69 +1,98 @@
 /*
- * Copyright (c) 2021 Espressif Systems (Shanghai) CO LTD
- * All rights reserved.
+ * SPDX-FileCopyrightText: 2021-2026 Espressif Systems (Shanghai) CO LTD
  *
+ * SPDX-License-Identifier: LicenseRef-Included
  *
- * Redistribution and use in source and binary forms, with or without modification,
- * are permitted provided that the following conditions are met:
+ * Zigbee Gateway Example
  *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
+ * This example code is in the Public Domain (or CC0 licensed, at your option.)
  *
- * 2. Redistributions in binary form, except as embedded into a Espressif Systems
- *    integrated circuit in a product or a software update for such product,
- *    must reproduce the above copyright notice, this list of conditions and
- *    the following disclaimer in the documentation and/or other materials
- *    provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its contributors
- *    may be used to endorse or promote products derived from this software without
- *    specific prior written permission.
- *
- * 4. Any software provided in binary form under this license must not be reverse
- *    engineered, decompiled, modified and/or disassembled.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * Unless required by applicable law or agreed to in writing, this
+ * software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ * CONDITIONS OF ANY KIND, either express or implied.
  */
 
-#include "esp_err.h"
-#include "zboss_api.h"
+#pragma once
 
-/* Zigbee Configuration */
-#define IEEE_CHANNEL_MASK               (1l << 13)  /* ZigBee default setting is channel 13 for light example usage */
-#define ERASE_PERSISTENT_CONFIG         ZB_TRUE     /* erase network devices before running example */
-#define MAX_CHILDREN                    10          /* the max amount of connected devices */
+#define ESP_ZIGBEE_PRIMARY_CHANNEL_MASK   (1U << CONFIG_ZB_EXAMPLE_PRIMARY_CHANNEL)
+#define ESP_ZIGBEE_SECONDARY_CHANNEL_MASK CONFIG_ZB_EXAMPLE_SECONDARY_CHANNEL_MASK
 
-#define ZB_ESP_DEFAULT_RADIO_CONFIG()                           \
-    {                                                           \
-        .radio_mode = RADIO_MODE_UART_RCP,                      \
-            .radio_uart_config = {                              \
-            .port = 1,                                          \
-            .uart_config =                                      \
-                {                                               \
-                    .baud_rate = 115200,                        \
-                    .data_bits = UART_DATA_8_BITS,              \
-                    .parity = UART_PARITY_DISABLE,              \
-                    .stop_bits = UART_STOP_BITS_1,              \
-                    .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,      \
-                    .rx_flow_ctrl_thresh = 0,                   \
-                    .source_clk = UART_SCLK_DEFAULT,            \
-                },                                              \
-            .rx_pin = 4,                                        \
-            .tx_pin = 5,                                        \
-        },                                                      \
+#define ESP_ZIGBEE_CUSTOM_GATEWAY_EP_ID (10)
+
+#define ESP_ZIGBEE_STORAGE_PARTITION_NAME "nvs"
+
+#define ESP_MANUFACTURER_NAME "\x09""ESPRESSIF"
+#define ESP_MODEL_IDENTIFIER "\x07"CONFIG_IDF_TARGET
+
+#if defined(CONFIG_ZB_GW_RCP_CHIP_ESP32C6)
+#define ESP_ZIGBEE_RCP_TARGET_CHIP ESP32C6_CHIP
+#elif defined(CONFIG_ZB_GW_RCP_CHIP_ESP32H2)
+#define ESP_ZIGBEE_RCP_TARGET_CHIP ESP32H2_CHIP
+#else
+#define ESP_ZIGBEE_RCP_TARGET_CHIP ESP_UNKNOWN_CHIP
+#endif
+
+#define ESP_ZIGBEE_ZC_CONFIG()                          \
+    {                                                   \
+        .device_type = EZB_NWK_DEVICE_TYPE_COORDINATOR, \
+        .install_code_policy = false,                   \
+        .zczr_config = {                                \
+            .max_children = 10,                         \
+        },                                              \
     }
 
-#define ZB_ESP_DEFAULT_HOST_CONFIG()                            \
-    {                                                           \
-        .host_connection_mode = HOST_CONNECTION_MODE_NONE,      \
+#if CONFIG_SOC_IEEE802154_SUPPORTED
+#define ESP_ZIGBEE_PLATFORM_CONFIG()                                 \
+    {                                                                \
+        .storage_partition_name = ESP_ZIGBEE_STORAGE_PARTITION_NAME, \
+        .radio_config = {                                            \
+            .radio_mode = ESP_ZIGBEE_RADIO_MODE_NATIVE,              \
+        },                                                           \
     }
+#else
+#define ESP_ZIGBEE_UART_CONFIG()                     \
+  {                                                  \
+      .port = 1,                                     \
+      .uart_config =                                 \
+          {                                          \
+              .baud_rate = 460800,                   \
+              .data_bits = UART_DATA_8_BITS,         \
+              .parity = UART_PARITY_DISABLE,         \
+              .stop_bits = UART_STOP_BITS_1,         \
+              .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, \
+              .rx_flow_ctrl_thresh = 0,              \
+              .source_clk = UART_SCLK_DEFAULT,       \
+          },                                         \
+      .rx_pin = CONFIG_DEFAULT_PIN_TO_RCP_TX,        \
+      .tx_pin = CONFIG_DEFAULT_PIN_TO_RCP_RX,        \
+  }
+
+#define ESP_ZIGBEE_PLATFORM_CONFIG()                                 \
+    {                                                                \
+        .storage_partition_name = ESP_ZIGBEE_STORAGE_PARTITION_NAME, \
+        .radio_config = {                                            \
+            .radio_mode = ESP_ZIGBEE_RADIO_MODE_UART_RCP,            \
+            .radio_uart_config = ESP_ZIGBEE_UART_CONFIG(),           \
+        },                                                           \
+    }
+#endif
+
+#define ESP_ZIGBEE_DEFAULT_CONFIG()                      \
+    {                                                    \
+        .device_config = ESP_ZIGBEE_ZC_CONFIG(),         \
+        .platform_config = ESP_ZIGBEE_PLATFORM_CONFIG(), \
+    };
+
+#define ESP_ZIGBEE_RCP_CONFIG()                                \
+  {                                                            \
+      .rcp_type = RCP_TYPE_UART,                               \
+      .uart_rx_pin = CONFIG_DEFAULT_PIN_TO_RCP_TX,             \
+      .uart_tx_pin = CONFIG_DEFAULT_PIN_TO_RCP_RX,             \
+      .uart_port = 1,                                          \
+      .uart_baudrate = 115200,                                 \
+      .reset_pin = CONFIG_DEFAULT_PIN_TO_RCP_RESET,            \
+      .boot_pin = CONFIG_DEFAULT_PIN_TO_RCP_BOOT,              \
+      .update_baudrate = 460800,                               \
+      .firmware_dir = "/" CONFIG_RCP_PARTITION_NAME "/ot_rcp", \
+      .target_chip = ESP_ZIGBEE_RCP_TARGET_CHIP,               \
+  }

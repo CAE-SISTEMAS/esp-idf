@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2018-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2018-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -192,6 +192,8 @@ esp_err_t protocomm_req_handle(protocomm_t *pc, const char *ep_name, uint32_t se
  *                          For protocomm security version 1 and 2
  *                          sec_params should contain pointer to struct of type
  *                          protocomm_security1_params_t and protocmm_security2_params_t respectively.
+ *                          The contents of this pointer must be valid till the security session
+ *                          has been running and is not closed.
  * @return
  *  - ESP_OK : Success
  *  - ESP_FAIL : Error adding endpoint / Endpoint with this name already exists
@@ -257,6 +259,21 @@ esp_err_t protocomm_set_version(protocomm_t *pc, const char *ep_name,
  *  - ESP_ERR_INVALID_ARG : Null instance/name arguments
  */
 esp_err_t protocomm_unset_version(protocomm_t *pc, const char *ep_name);
+
+/**
+ * @brief   Get the security version of the protocomm instance
+ *
+ * This API will return the security version of the protocomm instance.
+ *
+ * @param[in] pc        Pointer to the protocomm instance
+ * @param[out] sec_ver  Pointer to the security version
+ * @param[out] sec_patch_ver  Pointer to the security patch version
+ *
+ * @return
+ *  - ESP_OK : Success
+ *  - ESP_ERR_INVALID_ARG : Null instance/name arguments
+ */
+esp_err_t protocomm_get_sec_version(protocomm_t *pc, int *sec_ver, uint8_t *sec_patch_ver);
 
 #ifdef __cplusplus
 }

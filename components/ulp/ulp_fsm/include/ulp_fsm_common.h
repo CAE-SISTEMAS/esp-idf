@@ -9,6 +9,8 @@
    esp32s2/ulp.h and esp32s3/ulp.h
 */
 
+#include "esp_intr_alloc.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -25,6 +27,32 @@ extern "C" {
 union ulp_insn;  // Declared in the chip-specific ulp.h header
 
 typedef union ulp_insn ulp_insn_t;
+
+/**
+ * @brief Register ULP wakeup signal ISR
+ *
+ * @note The ISR routine will only be active if the main CPU is not in deepsleep
+ *
+ * @param fn    ISR callback function
+ * @param arg   ISR callback function arguments
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_INVALID_ARG if callback function is NULL
+ *      - ESP_ERR_NO_MEM if heap memory cannot be allocated for the interrupt
+ */
+esp_err_t ulp_isr_register(intr_handler_t fn, void *arg);
+
+/**
+ * @brief Deregister ULP wakeup signal ISR
+ *
+ * @param fn    ISR callback function
+ * @param arg   ISR callback function arguments
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_INVALID_ARG if callback function is NULL
+ *      - ESP_ERR_INVALID_STATE if a handler matching both callback function and its arguments isn't registered
+ */
+esp_err_t ulp_isr_deregister(intr_handler_t fn, void *arg);
 
 /**
  * @brief Resolve all macro references in a program and load it into RTC memory
@@ -52,7 +80,7 @@ esp_err_t ulp_process_macros_and_load(uint32_t load_addr, const ulp_insn_t* prog
  * 7. .text section
  * 8. .data section
  *
- * Linker script in components/ulp/ld/esp32.ulp.ld produces ELF files which
+ * Linker script in components/ulp/subproject/components/ulp_fsm/ld/ulp_fsm.ld produces ELF files which
  * correspond to this format. This linker script produces binaries with load_addr == 0.
  *
  * @param load_addr address where the program should be loaded, expressed in 32-bit words
@@ -61,7 +89,8 @@ esp_err_t ulp_process_macros_and_load(uint32_t load_addr, const ulp_insn_t* prog
  * @return
  *      - ESP_OK on success
  *      - ESP_ERR_INVALID_ARG if load_addr is out of range
- *      - ESP_ERR_INVALID_SIZE if program_size doesn't match (TEXT_OFFSET + TEXT_SIZE + DATA_SIZE)
+ *      - ESP_ERR_INVALID_SIZE if program_size doesn't match (TEXT_OFFSET + TEXT_SIZE + DATA_SIZE),
+ *        or if TEXT_SIZE + DATA_SIZE + BSS_SIZE exceeds the reserved ULP memory region
  *      - ESP_ERR_NOT_SUPPORTED if the magic number is incorrect
  */
 esp_err_t ulp_load_binary(uint32_t load_addr, const uint8_t* program_binary, size_t program_size);

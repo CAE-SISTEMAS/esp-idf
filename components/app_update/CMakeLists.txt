@@ -1,30 +1,29 @@
-idf_component_register(SRCS "esp_ota_ops.c"
-                            "esp_app_desc.c"
-                    INCLUDE_DIRS "include"
-                    REQUIRES spi_flash partition_table bootloader_support
-                    PRIV_REQUIRES esptool_py efuse)
+idf_build_get_property(target IDF_TARGET)
 
-# esp_app_desc structure is added as an undefined symbol because otherwise the
-# linker will ignore this structure as it has no other files depending on it.
-target_link_libraries(${COMPONENT_LIB} INTERFACE "-u esp_app_desc")
-
-if(CONFIG_APP_PROJECT_VER_FROM_CONFIG)
-    # Ignore current PROJECT_VER (which was set in __project_get_revision()).
-    # Gets the version from the CONFIG_APP_PROJECT_VER.
-    idf_build_set_property(PROJECT_VER "${CONFIG_APP_PROJECT_VER}")
+if(${target} STREQUAL "linux")
+    return() # This component is not supported by the POSIX/Linux simulator
 endif()
 
-# cut PROJECT_VER and PROJECT_NAME to required 32 characters.
-idf_build_get_property(project_ver PROJECT_VER)
-idf_build_get_property(project_name PROJECT_NAME)
-string(SUBSTRING "${project_ver}" 0 31 PROJECT_VER_CUT)
-string(SUBSTRING "${project_name}" 0 31 PROJECT_NAME_CUT)
-message(STATUS "App \"${PROJECT_NAME_CUT}\" version: ${PROJECT_VER_CUT}")
+idf_component_register(SRCS "esp_ota_ops.c"
+                             "ota_auto_confirm.c"
+                    INCLUDE_DIRS "include"
+                    REQUIRES partition_table bootloader_support
+                             esp_app_format esp_bootloader_format esp_partition
+                    PRIV_REQUIRES esptool_py efuse spi_flash esp_image_verify)
 
-set_source_files_properties(
-    SOURCE "esp_app_desc.c"
-    PROPERTIES COMPILE_DEFINITIONS
-    "PROJECT_VER=\"${PROJECT_VER_CUT}\"; PROJECT_NAME=\"${PROJECT_NAME_CUT}\"")
+# mbedtls is an *optional* requirement: it is linked only when another component in
+# the build pulls it in. esp_image_verify (a priv_require above) always brings
+# mbedtls into app builds; this directive makes it available to esp_ota_ops at
+# link time without app_update forcing mbedtls in by itself.
+idf_component_optional_requires(PRIVATE mbedtls)
+
+if(CONFIG_BOOTLOADER_APP_ROLLBACK_CONFIRM_ON_STARTUP)
+    # ota_auto_confirm.c has no other externally referenced symbol, so force the linker to pull
+    # its static PRE_APP_MAIN event registration from the archive.
+    target_link_libraries(${COMPONENT_LIB} INTERFACE "-u esp_ota_auto_confirm_include")
+endif()
+
+idf_define_esp_err_codes(HEADERS include/esp_ota_ops.h)
 
 if(NOT BOOTLOADER_BUILD)
     partition_table_get_partition_info(otadata_offset "--partition-type data --partition-subtype ota" "offset")
@@ -46,7 +45,9 @@ if(NOT BOOTLOADER_BUILD)
 
         add_custom_target(blank_ota_data ALL DEPENDS ${blank_otadata_file})
         add_dependencies(flash blank_ota_data)
-        add_dependencies(encrypted-flash blank_ota_data)
+        if(CONFIG_SECURE_FLASH_ENCRYPTION_MODE_DEVELOPMENT)
+            add_dependencies(encrypted-flash blank_ota_data)
+        endif()
 
         set(otatool_py "${python}" "${COMPONENT_DIR}/otatool.py")
 

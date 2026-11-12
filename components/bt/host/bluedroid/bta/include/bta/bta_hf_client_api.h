@@ -36,6 +36,7 @@
 /* Hands-Free unit(HF) version */
 #define HFP_HF_VERSION_1_6             0x0106       /* v1.6 */
 #define HFP_HF_VERSION_1_7             0x0107       /* v1.7 */
+#define HFP_HF_VERSION_1_9             0x0109       /* v1.9 */
 
 /* HFP peer (AG) features*/
 #define BTA_HF_CLIENT_PEER_FEAT_3WAY   0x00000001  /* Three-way calling */
@@ -65,6 +66,9 @@ typedef UINT16 tBTA_HF_CLIENT_PEER_FEAT;
 #define BTA_HF_CLIENT_FEAT_CODEC       0x00000080  /* Codec Negotiation */
 #define BTA_HF_CLIENT_FEAT_HF_IND      0x00000100  /* HF indicators */
 #define BTA_HF_CLIENT_FEAT_ESCO_S4     0x00000200  /* eSCO S4 Setting Supported */
+
+/* Proprietary features: using 31 ~ 16 bits, AT+BRSF bit 12 ~ 31 are reserved by spec */
+#define BTA_HF_CLIENT_FEAT_SWB         0x00010000  /* Super Wideband Speech */
 
 /* HFP HF extended call handling - masks not related to any spec */
 #define BTA_HF_CLIENT_CHLD_REL          0x00000001  /* 0  Release waiting call or held calls */
@@ -112,7 +116,9 @@ typedef UINT8 tBTA_HF_CLIENT_AT_RESULT_TYPE;
 #define BTA_HF_CLIENT_BSIR_EVT              19 /* in-band ring tone setting changed event */
 #define BTA_HF_CLIENT_BINP_EVT              20 /* binp number event */
 #define BTA_HF_CLIENT_RING_INDICATION       21 /* HF Client ring indication */
-#define BTA_HF_CLIENT_DISABLE_EVT           30 /* HF Client disabled */
+#define BTA_HF_CLIENT_DISABLE_EVT           22 /* HF Client disabled */
+#define BTA_HF_CLIENT_PKT_STAT_NUMS_GET_EVT 23 /* HF Client packet status nums */
+#define BTA_HF_CLIENT_AUDIO_LC3_OPEN_EVT   24  /* Audio connection with LC3-SWB codec open */
 
 typedef UINT8 tBTA_HF_CLIENT_EVT;
 
@@ -163,6 +169,7 @@ typedef UINT8 tBTA_HF_CLIENT_AT_CMD_TYPE;
 /* data associated with most non-AT events */
 /* placeholder, if not needed should be removed*/
 typedef struct {
+    UINT16       sync_conn_handle;
 } tBTA_HF_CLIENT_HDR;
 
 /* data associated with BTA_HF_CLIENT_REGISTER_EVT */
@@ -185,6 +192,12 @@ typedef struct {
     tBTA_HF_CLIENT_PEER_FEAT   peer_feat;
     tBTA_HF_CLIENT_CHLD_FEAT   chld_feat;
 } tBTA_HF_CLIENT_CONN;
+
+/* data associated with BTA_HF_CLIENT_AUDIO_XXX_EVT (OPEN/MSBC/LC3/CLOSE) */
+typedef struct {
+    tBTA_HF_CLIENT_HDR      hdr;
+    UINT16                  preferred_frame_size;
+} tBTA_HF_CLIENT_AUDIO_STAT;
 
 /* data associated with BTA_HF_CLIENT_IND_EVT event */
 typedef struct {
@@ -232,12 +245,24 @@ typedef struct {
     UINT16                     value;
 } tBTA_HF_CLIENT_VAL;
 
+/* data associated with BTA_HF_CLIENT_PKT_STAT_NUMS_GET_EVT */
+typedef struct {
+    UINT32 rx_total;
+    UINT32 rx_correct;
+    UINT32 rx_err;
+    UINT32 rx_none;
+    UINT32 rx_lost;
+    UINT32 tx_total;
+    UINT32 tx_discarded;
+} tBTA_SCO_PKT_STAT_NUMS;
+
 /* union of data associated with AG callback */
 typedef union {
     tBTA_HF_CLIENT_HDR              hdr;
     tBTA_HF_CLIENT_REGISTER         reg;
     tBTA_HF_CLIENT_OPEN             open;
     tBTA_HF_CLIENT_CONN             conn;
+    tBTA_HF_CLIENT_AUDIO_STAT       audio_stat;
     tBTA_HF_CLIENT_IND              ind;
     tBTA_HF_CLIENT_VAL              val;
     tBTA_HF_CLIENT_OPERATOR_NAME    operator;
@@ -245,6 +270,7 @@ typedef union {
     tBTA_HF_CLIENT_AT_RESULT        result;
     tBTA_HF_CLIENT_CLCC             clcc;
     tBTA_HF_CLIENT_CNUM             cnum;
+    tBTA_SCO_PKT_STAT_NUMS          pkt_num;
 } tBTA_HF_CLIENT;
 
 typedef UINT32 tBTA_HF_CLIENT_FEAT;
@@ -380,9 +406,80 @@ void BTA_HfClientAudioClose(UINT16 handle);
 void BTA_HfClientSendAT(UINT16 handle, tBTA_HF_CLIENT_AT_CMD_TYPE at, UINT32 val1, UINT32 val2, const char *str);
 
 #if (BTM_SCO_HCI_INCLUDED == TRUE )
+/*******************************************************************************
+**
+** Function         BTA_HfClientPktStatsNumsGet
+**
+** Description      Get the Number of packets status received and send
+**
+**
+** Returns          void
+**
+*******************************************************************************/
+void BTA_HfClientPktStatsNumsGet(UINT16 sync_conn_handle);
+
+/*******************************************************************************
+**
+** Function         BTA_HfClientCiData
+**
+** Description      Send SCO outgoing data ready event
+**
+**
+** Returns          void
+**
+*******************************************************************************/
 void BTA_HfClientCiData(void);
+
+/*******************************************************************************
+**
+** Function         BTA_HfClientAudioBuffAlloc
+**
+** Description      Allocate an audio buffer with specific size, reserve enough
+**                  space and offset for lower layer to send the buffer directly.
+**
+**
+** Returns          void
+**
+*******************************************************************************/
+void BTA_HfClientAudioBuffAlloc(UINT16 size, UINT8 **pp_buff, UINT8 **pp_data);
+
+/*******************************************************************************
+**
+** Function         BTA_HfClientAudioBuffFree
+**
+** Description      Free an audio buffer.
+**
+**
+** Returns          void
+**
+*******************************************************************************/
+void BTA_HfClientAudioBuffFree(UINT8 *p_buf);
+
+/*******************************************************************************
+**
+** Function         BTA_HfClientAudioDataSend
+**
+** Description      Send audio data to lower layer, whether success or not, buffer
+**                  is consumed.
+**
+**
+** Returns          void
+**
+*******************************************************************************/
+void BTA_HfClientAudioDataSend(UINT16 sync_conn_hdl, UINT8 *p_buff_start, UINT8 *p_data, UINT16 data_len);
+
 #endif /*#if (BTM_SCO_HCI_INCLUDED == TRUE ) */
 
+/*******************************************************************************
+**
+** Function         BTA_HfClientGetCbDataSize
+**
+** Description      Get callback data size of specific event
+**
+**
+** Returns          void
+**
+*******************************************************************************/
 int BTA_HfClientGetCbDataSize(tBTA_HF_CLIENT_EVT event);
 
 #ifdef __cplusplus

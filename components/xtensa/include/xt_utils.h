@@ -1,16 +1,17 @@
 /*
- * SPDX-FileCopyrightText: 2020-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "soc/soc_caps.h"
 #include "xtensa/config/core-isa.h"
 #include "xtensa/config/core.h"
 #include "xtensa/config/extreg.h"
-#include "xtensa/config/specreg.h"
+#include "xtensa/config/xt_specreg.h"
 #include "xtensa/xtruntime.h"
 #include "xt_instr_macros.h"
 #include "esp_bit_defs.h"
@@ -23,25 +24,6 @@ extern "C" {
 /* -------------------------------------------------- CPU Registers ----------------------------------------------------
  *
  * ------------------------------------------------------------------------------------------------------------------ */
-
-FORCE_INLINE_ATTR __attribute__((pure)) uint32_t xt_utils_get_core_id(void)
-{
-    /*
-    Note: We depend on SOC_CPU_CORES_NUM instead of XCHAL_HAVE_PRID as some single Xtensa targets (such as ESP32-S2) have
-    the PRID register even though they are single core.
-    */
-#if SOC_CPU_CORES_NUM > 1
-    // Read and extract bit 13 of special register PRID
-    uint32_t id;
-    asm volatile (
-        "rsr.prid %0\n"
-        "extui %0,%0,13,1"
-        :"=r"(id));
-    return id;
-#else
-    return 0;
-#endif // SOC_CPU_CORES_NUM > 1
-}
 
 FORCE_INLINE_ATTR __attribute__((pure)) uint32_t xt_utils_get_raw_core_id(void)
 {
@@ -57,6 +39,34 @@ FORCE_INLINE_ATTR __attribute__((pure)) uint32_t xt_utils_get_raw_core_id(void)
 #endif // XCHAL_HAVE_PRID
 }
 
+FORCE_INLINE_ATTR __attribute__((pure)) uint32_t xt_utils_get_core_id_from_raw(uint32_t raw_core_id)
+{
+    /*
+    Note: We depend on SOC_CPU_CORES_NUM instead of XCHAL_HAVE_PRID as some single Xtensa targets (such as ESP32-S2) have
+    the PRID register even though they are single core.
+    */
+#if SOC_CPU_CORES_NUM > 1
+    // Extract bit 13 of the PRID register value
+    uint32_t id;
+    asm volatile (
+        "extui %0,%1,13,1"
+        :"=r"(id):"r"(raw_core_id));
+    return id;
+#else
+    (void)raw_core_id;
+    return 0;
+#endif // SOC_CPU_CORES_NUM > 1
+}
+
+FORCE_INLINE_ATTR __attribute__((pure)) uint32_t xt_utils_get_core_id(void)
+{
+#if SOC_CPU_CORES_NUM > 1
+    return xt_utils_get_core_id_from_raw(xt_utils_get_raw_core_id());
+#else
+    return 0;
+#endif // SOC_CPU_CORES_NUM > 1
+}
+
 FORCE_INLINE_ATTR void *xt_utils_get_sp(void)
 {
     void *sp;
@@ -67,18 +77,30 @@ FORCE_INLINE_ATTR void *xt_utils_get_sp(void)
 FORCE_INLINE_ATTR uint32_t xt_utils_get_cycle_count(void)
 {
     uint32_t ccount;
-    RSR(CCOUNT, ccount);
+    RSR(XT_REG_CCOUNT, ccount);
     return ccount;
 }
 
 static inline void xt_utils_set_cycle_count(uint32_t ccount)
 {
-    WSR(CCOUNT, ccount);
+    WSR(XT_REG_CCOUNT, ccount);
 }
 
 FORCE_INLINE_ATTR void xt_utils_wait_for_intr(void)
 {
     asm volatile ("waiti 0\n");
+}
+
+FORCE_INLINE_ATTR void xt_utils_set_threadptr(void *ptr)
+{
+    asm volatile ("wur.threadptr %0" :: "r"(ptr));
+}
+
+FORCE_INLINE_ATTR void *xt_utils_get_threadptr(void)
+{
+    void *thread_ptr;
+    asm volatile ("rur.threadptr %0" : "=r"(thread_ptr));
+    return thread_ptr;
 }
 
 /* ------------------------------------------------- CPU Interrupts ----------------------------------------------------
@@ -99,7 +121,7 @@ FORCE_INLINE_ATTR void xt_utils_set_vecbase(uint32_t vecbase)
 FORCE_INLINE_ATTR uint32_t xt_utils_intr_get_enabled_mask(void)
 {
     uint32_t intr_mask;
-    RSR(INTENABLE, intr_mask);
+    RSR(XT_REG_INTENABLE, intr_mask);
     return intr_mask;
 }
 
@@ -116,31 +138,31 @@ FORCE_INLINE_ATTR uint32_t xt_utils_intr_get_enabled_mask(void)
 FORCE_INLINE_ATTR void xt_utils_set_breakpoint(int bp_num, uint32_t bp_addr)
 {
     //Set the breakpoint's address
-    if (bp_num == 0) {
-        WSR(IBREAKA_1, bp_addr);
+    if (bp_num == 1) {
+        WSR(XT_REG_IBREAKA_1, bp_addr);
     } else {
-        WSR(IBREAKA_0, bp_addr);
+        WSR(XT_REG_IBREAKA_0, bp_addr);
     }
     //Enable the breakpoint
     uint32_t brk_ena_reg;
-    RSR(IBREAKENABLE, brk_ena_reg);
+    RSR(XT_REG_IBREAKENABLE, brk_ena_reg);
     brk_ena_reg |= BIT(bp_num);
-    WSR(IBREAKENABLE, brk_ena_reg);
+    WSR(XT_REG_IBREAKENABLE, brk_ena_reg);
 }
 
 FORCE_INLINE_ATTR void xt_utils_clear_breakpoint(int bp_num)
 {
     // Disable the breakpoint using the break enable register
     uint32_t bp_en = 0;
-    RSR(IBREAKENABLE, bp_en);
+    RSR(XT_REG_IBREAKENABLE, bp_en);
     bp_en &= ~BIT(bp_num);
-    WSR(IBREAKENABLE, bp_en);
+    WSR(XT_REG_IBREAKENABLE, bp_en);
     // Zero the break address register
     uint32_t bp_addr = 0;
-    if (bp_num == 0) {
-        WSR(IBREAKA_1, bp_addr);
+    if (bp_num == 1) {
+        WSR(XT_REG_IBREAKA_1, bp_addr);
     } else {
-        WSR(IBREAKA_0, bp_addr);
+        WSR(XT_REG_IBREAKA_0, bp_addr);
     }
 }
 
@@ -152,7 +174,7 @@ FORCE_INLINE_ATTR void xt_utils_set_watchpoint(int wp_num,
 {
     // Initialize DBREAKC bits (see Table 4–143 or isa_rm.pdf)
     uint32_t dbreakc_reg = 0x3F;
-    dbreakc_reg = dbreakc_reg << (__builtin_ffs(size) - 1);
+    dbreakc_reg = dbreakc_reg << (__builtin_ffsll(size) - 1);
     dbreakc_reg = dbreakc_reg & 0x3F;
     if (on_read) {
         dbreakc_reg |= BIT(30);
@@ -161,24 +183,24 @@ FORCE_INLINE_ATTR void xt_utils_set_watchpoint(int wp_num,
         dbreakc_reg |= BIT(31);
     }
     // Enable break address and break control register
-    if (wp_num == 0) {
-        WSR(DBREAKA_1, (uint32_t) wp_addr);
-        WSR(DBREAKC_1, dbreakc_reg);
+    if (wp_num == 1) {
+        WSR(XT_REG_DBREAKA_1, (uint32_t) wp_addr);
+        WSR(XT_REG_DBREAKC_1, dbreakc_reg);
     } else {
-        WSR(DBREAKA_0, (uint32_t) wp_addr);
-        WSR(DBREAKC_0, dbreakc_reg);
+        WSR(XT_REG_DBREAKA_0, (uint32_t) wp_addr);
+        WSR(XT_REG_DBREAKC_0, dbreakc_reg);
     }
 }
 
 FORCE_INLINE_ATTR void xt_utils_clear_watchpoint(int wp_num)
 {
     // Clear both break control and break address register
-    if (wp_num == 0) {
-        WSR(DBREAKC_1, 0);
-        WSR(DBREAKA_1, 0);
+    if (wp_num == 1) {
+        WSR(XT_REG_DBREAKC_1, 0);
+        WSR(XT_REG_DBREAKA_1, 0);
     } else {
-        WSR(DBREAKC_0, 0);
-        WSR(DBREAKA_0, 0);
+        WSR(XT_REG_DBREAKC_0, 0);
+        WSR(XT_REG_DBREAKA_0, 0);
     }
 }
 

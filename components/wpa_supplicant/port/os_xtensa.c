@@ -24,12 +24,17 @@
 
 #include "os.h"
 #include <stdlib.h>
-#include <time.h>
 #include <unistd.h>
 #include <sys/time.h>
 #include "esp_random.h"
 #include "utils/common.h"
+#include "utils/const_time.h"
 #include "mbedtls/platform_util.h"
+
+int os_memcmp_const_impl(const void *a, const void *b, size_t len)
+{
+    return const_time_memcmp(a, b, len);
+}
 
 int os_get_time(struct os_time *t)
 {
